@@ -132,6 +132,7 @@
     scene.add(rim);
 
     let w = 0, h = 0, fitDist = radius * 3;
+    let target = 0, current = 0, dirty = true;
 
     function computeFit () {
       const vFov = camera.fov * Math.PI / 180;
@@ -155,8 +156,6 @@
 
     new ResizeObserver(resize).observe(root);
     resize();
-
-    let target = 0, current = 0, dirty = true;
 
     function readScroll () {
       const r = track.getBoundingClientRect();
