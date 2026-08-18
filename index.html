@@ -218,7 +218,7 @@
       camera.position.set(
         look.x + Math.sin(az) * Math.cos(el) * d,
         look.y + Math.sin(el) * d,
-        look.z + Math.cos(az) * d
+        look.z + Math.cos(az) * Math.cos(el) * d
       );
       camera.lookAt(look);
 
