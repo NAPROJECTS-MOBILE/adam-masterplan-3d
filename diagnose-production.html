@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ADAM production-path diagnostic</title>
+<style>
+*{box-sizing:border-box}html,body{margin:0;background:#080808;color:#fff;font-family:system-ui,sans-serif}
+#hud{position:fixed;z-index:99999;left:0;top:0;max-width:min(94vw,620px);max-height:68vh;overflow:auto;background:rgba(0,0,0,.9);padding:9px 11px;font:11px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace;border-right:1px solid #333;border-bottom:1px solid #333}
+.ok{color:#7ee787}.bad{color:#ff7b72}.warn{color:#e3b341}.info{color:#9aa}
+.prelude{height:320vh;position:relative}.prelude p{position:sticky;top:45vh;margin:0;text-align:center;opacity:.65;padding:0 24px}
+#services{height:400vh;position:relative}.services-sticky{position:sticky;top:0;height:100vh;background:#111;overflow:hidden}.h-scroll-scene{position:relative;width:100%;height:100%}
+.scene3d{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;contain:strict}.scene3d canvas{display:block;width:100%;height:100%;opacity:0;transition:opacity .7s ease}.scene3d[data-ready] canvas{opacity:1}
+.after{height:100vh;display:grid;place-items:center;background:#080808}
+</style>
+</head>
+<body>
+<div id="hud"><b>PRODUCTION-PATH DIAGNOSTIC</b></div>
+<section class="prelude"><p>Scroll down — this page preserves the production lazy-load / opacity / dirty-loop behaviour.</p></section>
+<section id="services"><div class="services-sticky"><div class="h-scroll-scene"><div class="scene3d" data-scene3d><canvas data-scene3d-canvas></canvas></div></div></div></section>
+<section class="after">End of test</section>
+
+<script type="importmap">
+{"imports":{"three":"https://unpkg.com/three@0.160.0/build/three.module.js","three/addons/":"https://unpkg.com/three@0.160.0/examples/jsm/"}}
+</script>
+<script>
+window.__hud=document.getElementById('hud');
+window.__log=(m,c='info')=>{const d=document.createElement('div');d.className=c;d.textContent=m;window.__hud.appendChild(d);console.log('[prod-diag]',m)};
+window.addEventListener('error',e=>window.__log('WINDOW ERROR: '+(e.message||e.error),'bad'));
+window.addEventListener('unhandledrejection',e=>window.__log('UNHANDLED REJECTION: '+(e.reason?.message||e.reason),'bad'));
+window.__log('stage 0 — page script running','ok');
+</script>
+
+<script type="module">
+(() => {
+'use strict';
+const log=window.__log;
+const CONFIG={modelUrl:'./model/adam-masterplan.min.glb',preloadMargin:'150% 0px',maxDpr:1.75,maxDprMobile:1.4,damping:.09,accent:0xc8f542};
+const KEYFRAMES=[
+ {azimuth:30,elevation:34,zoom:1,panX:0,panZ:0},
+ {azimuth:4,elevation:19,zoom:.60,panX:.16,panZ:.04},
+ {azimuth:-26,elevation:56,zoom:.74,panX:-.14,panZ:0},
+ {azimuth:-56,elevation:27,zoom:.92,panX:-.02,panZ:.02}
+];
+const root=document.querySelector('[data-scene3d]');
+const canvas=root&&root.querySelector('[data-scene3d-canvas]');
+const track=document.querySelector('#services')||(root&&root.closest('.h-scroll'));
+log('stage 1 — root/canvas/track '+!!root+'/'+!!canvas+'/'+!!track,(root&&canvas&&track)?'ok':'bad');
+if(!root||!canvas||!track)return;
+const rr=root.getBoundingClientRect();
+log('stage 2 — initial root '+Math.round(rr.width)+' x '+Math.round(rr.height),'ok');
+log('stage 2 — initial canvas opacity='+getComputedStyle(canvas).opacity,'info');
+const reduceMotion=matchMedia('(prefers-reduced-motion: reduce)').matches;
+const isMobile=matchMedia('(max-width: 767px)').matches;
+const supported=(()=>{try{const c=document.createElement('canvas');return !!(c.getContext('webgl2')||c.getContext('webgl'))}catch(e){return false}})();
+log('stage 3 — support probe='+supported,supported?'ok':'bad');
+if(!supported)return;
+let booted=false;
+const io=new IntersectionObserver(entries=>{
+ const hit=entries.some(e=>e.isIntersecting);
+ log('stage 4 — BOOT observer fired intersecting='+hit+' top='+Math.round(track.getBoundingClientRect().top),hit?'ok':'warn');
+ if(booted||!hit)return;
+ booted=true;io.disconnect();
+ boot().catch(err=>{log('BOOT FAILED: '+(err?.stack||err?.message||err),'bad');console.error(err)});
+},{rootMargin:CONFIG.preloadMargin});
+io.observe(track);
+log('stage 4 — boot observer attached, margin='+CONFIG.preloadMargin,'info');
+
+async function boot(){
+ log('stage 5 — boot() entered','ok');
+ log('stage 6 — importing modules…','info');
+ const THREE=await import('three');
+ const [{GLTFLoader},{MeshoptDecoder}]=await Promise.all([
+  import('three/addons/loaders/GLTFLoader.js'),
+  import('three/addons/libs/meshopt_decoder.module.js')
+ ]);
+ log('stage 6 — modules resolved, three r'+THREE.REVISION,'ok');
+ const dpr=Math.min(window.devicePixelRatio||1,isMobile?CONFIG.maxDprMobile:CONFIG.maxDpr);
+ const renderer=new THREE.WebGLRenderer({canvas,alpha:true,antialias:dpr<1.5,powerPreference:'high-performance',stencil:false});
+ renderer.setPixelRatio(dpr);renderer.outputColorSpace=THREE.SRGBColorSpace;renderer.toneMapping=THREE.ACESFilmicToneMapping;renderer.toneMappingExposure=1.15;renderer.shadowMap.enabled=false;
+ log('stage 7 — renderer created alpha=true dpr='+dpr,'ok');
+ const scene=new THREE.Scene();
+ const camera=new THREE.PerspectiveCamera(38,1,.1,4000);
+ const loader=new GLTFLoader();loader.setMeshoptDecoder(MeshoptDecoder);
+ log('stage 8 — loadAsync requesting '+CONFIG.modelUrl,'info');
+ const gltf=await loader.loadAsync(CONFIG.modelUrl);
+ log('stage 8 — loadAsync resolved','ok');
+ const model=gltf.scene;
+ const strip=[];let meshes=0;
+ model.traverse(o=>{if(o.isCamera||o.isLight)strip.push(o);if(o.isMesh){meshes++;o.castShadow=false;o.receiveShadow=false}});
+ strip.forEach(o=>o.parent&&o.parent.remove(o));
+ log('stage 9 — meshes='+meshes+' stripped='+strip.length,meshes===8?'ok':'warn');
+ const box=new THREE.Box3().setFromObject(model);const size=box.getSize(new THREE.Vector3());const centre=box.getCenter(new THREE.Vector3());model.position.sub(centre);scene.add(model);
+ const sphere=new THREE.Sphere();box.getBoundingSphere(sphere);const radius=sphere.radius;
+ log('stage 10 — bbox='+size.toArray().map(v=>v.toFixed(1)).join(' x ')+' r='+radius.toFixed(1),'ok');
+ scene.add(new THREE.HemisphereLight(0xffffff,0x9a9a9a,1.9));
+ const key=new THREE.DirectionalLight(0xfff6e8,2.3);key.position.set(.45,1,.55).multiplyScalar(radius);scene.add(key);
+ const rim=new THREE.DirectionalLight(CONFIG.accent,.85);rim.position.set(-.7,.35,-.6).multiplyScalar(radius);scene.add(rim);
+ let w=0,h=0,fitDist=radius*3;let target=0,current=0,dirty=true;
+ function computeFit(){const vFov=camera.fov*Math.PI/180;const hFov=2*Math.atan(Math.tan(vFov/2)*camera.aspect);fitDist=Math.max(radius/Math.sin(vFov/2),radius/Math.sin(hFov/2))}
+ function resize(){const r=root.getBoundingClientRect();const nw=Math.max(1,Math.round(r.width));const nh=Math.max(1,Math.round(r.height));if(nw===w&&nh===h)return;w=nw;h=nh;renderer.setSize(w,h,false);camera.aspect=w/h;camera.fov=h>w?50:38;camera.updateProjectionMatrix();computeFit();dirty=true;log('stage 11 — resize '+w+' x '+h+' buffer '+canvas.width+' x '+canvas.height,'ok')}
+ new ResizeObserver(resize).observe(root);resize();
+ function readScroll(){const r=track.getBoundingClientRect();const total=r.height-window.innerHeight;target=total>0?Math.min(1,Math.max(0,-r.top/total)):0}
+ let queued=false;function onScroll(){if(queued)return;queued=true;requestAnimationFrame(()=>{queued=false;readScroll()})}
+ addEventListener('scroll',onScroll,{passive:true});addEventListener('resize',onScroll,{passive:true});readScroll();current=target;
+ const look=new THREE.Vector3();
+ function apply(t){const seg=t*(KEYFRAMES.length-1);const i=Math.min(KEYFRAMES.length-2,Math.floor(seg));const f=ease(seg-i);const a=KEYFRAMES[i],b=KEYFRAMES[i+1];const az=lerp(a.azimuth,b.azimuth,f)*Math.PI/180;const el=lerp(a.elevation,b.elevation,f)*Math.PI/180;const zoom=lerp(a.zoom,b.zoom,f);const panX=lerp(a.panX,b.panX,f)*size.x;const panZ=lerp(a.panZ,b.panZ,f)*size.z;look.set(panX,0,panZ);const d=fitDist*zoom;camera.position.set(look.x+Math.sin(az)*Math.cos(el)*d,look.y+Math.sin(el)*d,look.z+Math.cos(az)*Math.cos(el)*d);camera.lookAt(look)}
+ let running=false,rafId=0,frames=0,renders=0;
+ function frame(){rafId=requestAnimationFrame(frame);frames++;const delta=target-current;if(Math.abs(delta)>.00015){current+=delta*(reduceMotion?1:CONFIG.damping);dirty=true}else if(current!==target){current=target;dirty=true}if(!dirty)return;dirty=false;apply(current);renderer.render(scene,camera);renders++;if(renders<=3)log('stage 12 — render #'+renders+' frame='+frames+' scroll='+current.toFixed(3),'ok')}
+ const start=()=>{if(!running){running=true;dirty=true;log('stage 13 — START called','ok');frame()}};
+ const stop=()=>{if(running){running=false;cancelAnimationFrame(rafId);log('stage 13 — STOP called','warn')}};
+ new IntersectionObserver(entries=>{const hit=entries.some(e=>e.isIntersecting);log('stage 13 — RUN observer intersecting='+hit+' top='+Math.round(track.getBoundingClientRect().top),hit?'ok':'warn');hit?start():stop()},{rootMargin:'25% 0px'}).observe(track);
+ document.addEventListener('visibilitychange',()=>{log('visibilitychange hidden='+document.hidden,'info');document.hidden?stop():start()});
+ apply(current);renderer.render(scene,camera);renders++;
+ log('stage 14 — manual first render complete; opacity before ready='+getComputedStyle(canvas).opacity,'ok');
+ root.setAttribute('data-ready','');
+ requestAnimationFrame(()=>log('stage 15 — data-ready='+root.hasAttribute('data-ready')+' computed opacity='+getComputedStyle(canvas).opacity,'ok'));
+ start();
+ window.__prodDiag={model,camera,scene,renderer,root,canvas};
+}
+const lerp=(a,b,t)=>a+(b-a)*t;const ease=t=>t<.5?4*t*t*t:1-Math.pow(-2*t+2,3)/2;
+})();
+</script>
+</body>
+</html>
