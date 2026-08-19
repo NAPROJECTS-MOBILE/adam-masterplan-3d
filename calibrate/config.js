@@ -1,4 +1,4 @@
-export const MODEL_URL = './model/adam-masterplan.min.glb';
+export const MODEL_URL = './model/adam_landscape_in_use_fullerversion.glb';
 export const FLAT_THRESHOLD = 0.1;
 
 export const PRESETS = {
