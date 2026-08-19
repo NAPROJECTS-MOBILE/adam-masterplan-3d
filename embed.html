@@ -1,3 +1,8 @@
+<!-- ============================================================
+     ADAM masterplan — scroll-driven 3D
+     Webflow Code Embed, placed inside .h-scroll-scene
+     ============================================================ -->
+
 <div class="scene3d" data-scene3d>
   <canvas data-scene3d-canvas></canvas>
 </div>
@@ -16,6 +21,7 @@
   .scene3d[data-ready] canvas{ opacity:1; }
 </style>
 
+<!-- Only ONE import map per document. Merge if one already exists. -->
 <script type="importmap">
 {
   "imports": {
@@ -30,15 +36,29 @@
   'use strict';
 
   const CONFIG = {
-    // ↓↓↓ THE ONLY LINE TO CHANGE ↓↓↓
     modelUrl: 'https://cdn.jsdelivr.net/gh/NAPROJECTS-MOBILE/adam-masterplan-3d@v1.0.0/model/adam-masterplan.min.glb',
-    // ↑↑↑ THE ONLY LINE TO CHANGE ↑↑↑
 
     preloadMargin: '150% 0px',
     maxDpr: 1.75,
     maxDprMobile: 1.4,
     damping: 0.09,
+
+    // Meshes thinner than this on Y are treated as ground/roads: still rendered,
+    // but excluded from the camera bounds and given a darker presentation material.
+    // Measured: this excludes 'Rectangle' (75.13 x 0.00 x 33.40 slab), 'path_11',
+    // 'floor' and a small 'Rectangle_2'. Filtered radius 18.95 vs 41.11 unfiltered.
+    flatThreshold: 0.1,
+
+    groundColor: 0x2e2e2e,
     accent: 0xc8f542,
+
+    light: {
+      hemisphere: 0.6,
+      key: 1.4,
+      rim: 0.5,
+      exposure: 0.85
+    },
+
     debug: false
   };
 
@@ -48,6 +68,8 @@
     { azimuth: -26, elevation: 56, zoom: 0.74, panX: -0.14, panZ: 0.00 },
     { azimuth: -56, elevation: 27, zoom: 0.92, panX: -0.02, panZ: 0.02 }
   ];
+
+  const TRIGGER_SELECTOR = '.h-scroll-trigger-1, .h-scroll-trigger-1-copy';
 
   const root   = document.querySelector('[data-scene3d]');
   const canvas = root && root.querySelector('[data-scene3d-canvas]');
@@ -60,7 +82,11 @@
   const supported = (() => {
     try {
       const c = document.createElement('canvas');
-      return !!(c.getContext('webgl2') || c.getContext('webgl'));
+      const gl = c.getContext('webgl2') || c.getContext('webgl');
+      if (!gl) return false;
+      const lose = gl.getExtension('WEBGL_lose_context');
+      if (lose) lose.loseContext();
+      return true;
     } catch (e) { return false; }
   })();
   if (!supported) return;
@@ -70,7 +96,10 @@
     if (booted || !entries.some(e => e.isIntersecting)) return;
     booted = true;
     io.disconnect();
-    boot().catch(err => console.warn('[scene3d]', err));
+    boot().catch((err) => {
+      root.setAttribute('data-ready', '');
+      console.error('[scene3d] boot failed:', err);
+    });
   }, { rootMargin: CONFIG.preloadMargin });
   io.observe(track);
 
@@ -92,7 +121,7 @@
     renderer.setPixelRatio(dpr);
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 1.15;
+    renderer.toneMappingExposure = CONFIG.light.exposure;
     renderer.shadowMap.enabled = false;
 
     const scene = new THREE.Scene();
@@ -110,34 +139,97 @@
       if (o.isMesh) { o.castShadow = false; o.receiveShadow = false; }
     });
     strip.forEach(o => o.parent && o.parent.remove(o));
+    model.updateWorldMatrix(true, true);
 
-    const box = new THREE.Box3().setFromObject(model);
-    const size = box.getSize(new THREE.Vector3());
-    const centre = box.getCenter(new THREE.Vector3());
+    const contentBox = new THREE.Box3();
+    const flatMeshes = [];
+    let solidCount = 0;
+
+    model.traverse((o) => {
+      if (!o.isMesh) return;
+      const b = new THREE.Box3().setFromObject(o);
+      if (b.getSize(new THREE.Vector3()).y >= CONFIG.flatThreshold) {
+        contentBox.union(b);
+        solidCount++;
+      } else {
+        flatMeshes.push(o);
+      }
+    });
+
+    if (solidCount === 0 || contentBox.isEmpty()) {
+      contentBox.setFromObject(model);
+      console.warn('[scene3d] flat-mesh filter matched no solid geometry; using full bounds');
+    }
+
+    for (const m of flatMeshes) {
+      m.material = m.material.clone();
+      m.material.color = new THREE.Color(CONFIG.groundColor);
+      m.material.roughness = Math.min(1, (m.material.roughness ?? 1));
+    }
+
+    const size = contentBox.getSize(new THREE.Vector3());
+    const centre = contentBox.getCenter(new THREE.Vector3());
+    const sphere = new THREE.Sphere();
+    contentBox.getBoundingSphere(sphere);
+    const radius = sphere.radius;
+
     model.position.sub(centre);
     scene.add(model);
 
-    const sphere = new THREE.Sphere();
-    box.getBoundingSphere(sphere);
-    const radius = sphere.radius;
+    if (CONFIG.debug) {
+      console.log('[scene3d] solid meshes', solidCount,
+        '| flat meshes', flatMeshes.length,
+        '| filtered size', size.toArray().map(v => +v.toFixed(2)),
+        '| radius', +radius.toFixed(2));
+    }
 
-    scene.add(new THREE.HemisphereLight(0xffffff, 0x9a9a9a, 1.9));
+    scene.add(new THREE.HemisphereLight(0xffffff, 0x9a9a9a, CONFIG.light.hemisphere));
 
-    const key = new THREE.DirectionalLight(0xfff6e8, 2.3);
+    const key = new THREE.DirectionalLight(0xfff6e8, CONFIG.light.key);
     key.position.set(0.45, 1.0, 0.55).multiplyScalar(radius);
     scene.add(key);
 
-    const rim = new THREE.DirectionalLight(CONFIG.accent, 0.85);
+    const rim = new THREE.DirectionalLight(CONFIG.accent, CONFIG.light.rim);
     rim.position.set(-0.7, 0.35, -0.6).multiplyScalar(radius);
     scene.add(rim);
 
     let w = 0, h = 0, fitDist = radius * 3;
     let target = 0, current = 0, dirty = true;
+    let stops = [];
 
     function computeFit () {
       const vFov = camera.fov * Math.PI / 180;
       const hFov = 2 * Math.atan(Math.tan(vFov / 2) * camera.aspect);
       fitDist = Math.max(radius / Math.sin(vFov / 2), radius / Math.sin(hFov / 2));
+    }
+
+    function buildStops () {
+      const els = Array.from(track.querySelectorAll(TRIGGER_SELECTOR));
+      if (els.length < 2) { stops = []; return; }
+      const y = window.scrollY || window.pageYOffset || 0;
+      const s = els.map(el => el.getBoundingClientRect().top + y - window.innerHeight);
+      for (let i = 1; i < s.length; i++) {
+        if (!(s[i] > s[i - 1])) { stops = []; return; }
+      }
+      stops = s;
+    }
+
+    function readScroll () {
+      if (stops.length >= 2) {
+        const y = window.scrollY || window.pageYOffset || 0;
+        const last = stops.length - 1;
+        if (y <= stops[0]) { target = 0; return; }
+        if (y >= stops[last]) { target = 1; return; }
+        let i = 0;
+        while (i < last - 1 && y > stops[i + 1]) i++;
+        const span = stops[i + 1] - stops[i];
+        const local = span > 0 ? (y - stops[i]) / span : 0;
+        target = (i + local) / last;
+        return;
+      }
+      const r = track.getBoundingClientRect();
+      const total = r.height - window.innerHeight;
+      target = total > 0 ? Math.min(1, Math.max(0, -r.top / total)) : 0;
     }
 
     function resize () {
@@ -151,17 +243,16 @@
       camera.fov = h > w ? 50 : 38;
       camera.updateProjectionMatrix();
       computeFit();
+      buildStops();
+      readScroll();
       dirty = true;
     }
 
     new ResizeObserver(resize).observe(root);
     resize();
-
-    function readScroll () {
-      const r = track.getBoundingClientRect();
-      const total = r.height - window.innerHeight;
-      target = total > 0 ? Math.min(1, Math.max(0, -r.top / total)) : 0;
-    }
+    buildStops();
+    readScroll();
+    current = target;
 
     let queued = false;
     function onScroll () {
@@ -170,9 +261,7 @@
       requestAnimationFrame(() => { queued = false; readScroll(); });
     }
     addEventListener('scroll', onScroll, { passive: true });
-    addEventListener('resize', onScroll, { passive: true });
-    readScroll();
-    current = target;
+    addEventListener('resize', () => { buildStops(); onScroll(); }, { passive: true });
 
     const look = new THREE.Vector3();
 
@@ -185,10 +274,8 @@
       const az   = lerp(a.azimuth,   b.azimuth,   f) * Math.PI / 180;
       const el   = lerp(a.elevation, b.elevation, f) * Math.PI / 180;
       const zoom = lerp(a.zoom,      b.zoom,      f);
-      const panX = lerp(a.panX,      b.panX,      f) * size.x;
-      const panZ = lerp(a.panZ,      b.panZ,      f) * size.z;
 
-      look.set(panX, 0, panZ);
+      look.set(lerp(a.panX, b.panX, f) * size.x, 0, lerp(a.panZ, b.panZ, f) * size.z);
 
       const d = fitDist * zoom;
       camera.position.set(
@@ -197,13 +284,6 @@
         look.z + Math.cos(az) * Math.cos(el) * d
       );
       camera.lookAt(look);
-
-      if (CONFIG.debug) {
-        console.log('scroll', t.toFixed(3),
-          'az', (az * 180 / Math.PI).toFixed(1),
-          'el', (el * 180 / Math.PI).toFixed(1),
-          'zoom', zoom.toFixed(2));
-      }
     }
 
     let running = false, rafId = 0;
@@ -243,6 +323,9 @@
         Object.assign(KEYFRAMES[Math.round(current * (KEYFRAMES.length - 1))], kf);
         dirty = true;
       },
+      stops: () => stops,
+      progress: () => current,
+      bounds: () => ({ size: size.toArray(), radius, fitDist }),
       model, camera, scene, renderer
     };
   }
