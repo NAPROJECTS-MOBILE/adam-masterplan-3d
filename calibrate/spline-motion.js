@@ -1,16 +1,24 @@
-// ADAM calibration motion wrapper — v5.3 + small height nudges
+import * as THREE from 'three';
+
+// ADAM calibration motion wrapper — v5.3 + exact cluster-2 baseline alignment
 //
-// Keep the verified v5.3 motion implementation pinned to its immutable commit,
-// then apply tiny visual calibration tweaks locally without disturbing the
-// 53-object movement mappings.
+// Keep the verified v5.3 movement implementation pinned to its immutable
+// commit, then apply only the small visual calibration corrections here.
 
 export { MOTION_WINDOW, TRACKS, AMBIENT_DRIVERS } from 'https://cdn.jsdelivr.net/gh/NAPROJECTS-MOBILE/adam-masterplan-3d@8de5103d184ab80037f788834abe3d748cc50c99/calibrate/spline-motion.js';
 import { createSplineMotion as createCoreSplineMotion } from 'https://cdn.jsdelivr.net/gh/NAPROJECTS-MOBILE/adam-masterplan-3d@8de5103d184ab80037f788834abe3d748cc50c99/calibrate/spline-motion.js';
 
-const LOWER_RECTANGLE = 'Scene_1/Main_Group/clusters/cluster_2/Rectangle_3_2';
-const RAISE_BOOLEAN = 'Scene_1/Main_Group/clusters/cluster_2/building_2_2/Boolean_12';
-const RECTANGLE_Y_NUDGE = -2;
+const BOOLEAN_12 = 'Scene_1/Main_Group/clusters/cluster_2/building_2_2/Boolean_12';
 const BOOLEAN_Y_NUDGE = 2;
+
+// User-confirmed cluster-2 pieces whose lower edges should all share the same
+// visual baseline as Boolean_12 at its ambient BASE state.
+const ALIGN_BOTTOM_PATHS = [
+  'Scene_1/Main_Group/clusters/cluster_2/Rectangle_10',
+  'Scene_1/Main_Group/clusters/cluster_2/building_2_1/Rectangle_19_1',
+  'Scene_1/Main_Group/clusters/cluster_2/Rectangle_2_5',
+  'Scene_1/Main_Group/clusters/cluster_2/Rectangle_3_2'
+];
 
 function pathOf(o) {
   const parts = [];
@@ -26,59 +34,104 @@ function findByPath(model, path) {
   return hit;
 }
 
-function applyYNudge(node, amount) {
+function applyLocalYNudge(node, amount) {
   if (!node) return;
   node.position.y += amount;
   node.updateMatrix();
   node.matrixWorldNeedsUpdate = true;
-  node.updateMatrixWorld(true);
+}
+
+function worldBottom(node) {
+  if (!node) return null;
+  node.updateWorldMatrix(true, true);
+  const box = new THREE.Box3().setFromObject(node, true);
+  return box.isEmpty() ? null : box.min.y;
+}
+
+function shiftNodeByWorldY(node, deltaWorldY) {
+  if (!node || !node.parent || Math.abs(deltaWorldY) < 1e-9) return;
+
+  node.parent.updateWorldMatrix(true, false);
+  node.updateWorldMatrix(true, false);
+
+  const worldOrigin = node.getWorldPosition(new THREE.Vector3());
+  worldOrigin.y += deltaWorldY;
+
+  // Convert the desired world-space origin back into the node parent's local
+  // coordinates. This works even if the parent has scale/rotation, so the
+  // bottom alignment is exact rather than another guessed local-pixel nudge.
+  const localOrigin = node.parent.worldToLocal(worldOrigin.clone());
+  node.position.copy(localOrigin);
+  node.updateMatrix();
+  node.matrixWorldNeedsUpdate = true;
+}
+
+function alignBottomTo(node, targetWorldY) {
+  const current = worldBottom(node);
+  if (current == null || targetWorldY == null) return null;
+  const delta = targetWorldY - current;
+  shiftNodeByWorldY(node, delta);
+  node.updateWorldMatrix(true, true);
+  return delta;
 }
 
 export function createSplineMotion(model, opts = {}) {
   const motion = createCoreSplineMotion(model, opts);
-
-  // Previous user-requested calibration: lower Rectangle_3_2 by two local units.
-  // It is static, so this only needs to be applied once.
-  const rectangle = findByPath(model, LOWER_RECTANGLE);
-  if (rectangle) {
-    applyYNudge(rectangle, RECTANGLE_Y_NUDGE);
-    if (opts.debug) console.log('[ADAM calibration] Rectangle_3_2 Y -2');
-  } else if (opts.debug) {
-    console.warn('[ADAM calibration] Rectangle_3_2 not found');
-  }
-
-  // Boolean_12 is part of the ambient animation and its core transform is
-  // rewritten every frame. Raise it by a constant +2 local units AFTER the
-  // authoritative Spline animation has been applied. This preserves its exact
-  // motion amplitude/timing while lifting the whole animated block just enough
-  // for the lower edge/glow to sit clear of the base plate.
-  const boolean12 = findByPath(model, RAISE_BOOLEAN);
+  const boolean12 = findByPath(model, BOOLEAN_12);
   const coreSetAmbientTime = motion.setAmbientTime?.bind(motion);
+
+  // Put Boolean_12 at its authoritative Spline BASE state, then retain the +2
+  // local-unit lift that fixed the previously clipped lower glow line.
+  if (coreSetAmbientTime) coreSetAmbientTime(0);
+  if (boolean12) applyLocalYNudge(boolean12, BOOLEAN_Y_NUDGE);
+  model.updateMatrixWorld(true);
+
+  // Use the now-correct Boolean_12 lower edge as the single canonical baseline.
+  // This satisfies both requested relationships at once:
+  //   Rectangle_10 + Rectangle_19_1 == Boolean_12 bottom
+  //   Rectangle_10 + Rectangle_2_5 == Rectangle_3_2 bottom
+  // by putting all four static pieces on exactly the same world-Y baseline.
+  const baselineY = worldBottom(boolean12);
+  const aligned = [];
+
+  for (const path of ALIGN_BOTTOM_PATHS) {
+    const node = findByPath(model, path);
+    if (!node) {
+      if (opts.debug) console.warn('[ADAM calibration] alignment target not found:', path);
+      continue;
+    }
+    const delta = alignBottomTo(node, baselineY);
+    aligned.push({ path, deltaWorldY: delta });
+  }
+  model.updateMatrixWorld(true);
+
+  // Boolean_12 is ambient-driven and its local transform is rewritten each
+  // frame. Reapply only its constant +2 calibration after the core animation;
+  // the static aligned pieces do NOT follow its animation and remain fixed.
   if (coreSetAmbientTime && boolean12) {
     motion.setAmbientTime = seconds => {
       coreSetAmbientTime(seconds);
-      applyYNudge(boolean12, BOOLEAN_Y_NUDGE);
+      applyLocalYNudge(boolean12, BOOLEAN_Y_NUDGE);
+      model.updateMatrixWorld(true);
     };
   }
 
   const coreReset = motion.reset?.bind(motion);
-  if (coreReset && boolean12) {
+  if (coreReset) {
     motion.reset = () => {
       coreReset();
-      applyYNudge(boolean12, BOOLEAN_Y_NUDGE);
-      // reset() also restores the static levelled Rectangle_3_2, so reapply its
-      // tiny user calibration after a manual reset.
-      if (rectangle) applyYNudge(rectangle, RECTANGLE_Y_NUDGE);
+      if (coreSetAmbientTime) coreSetAmbientTime(0);
+      if (boolean12) applyLocalYNudge(boolean12, BOOLEAN_Y_NUDGE);
+      model.updateMatrixWorld(true);
     };
   }
 
-  if (boolean12) {
-    applyYNudge(boolean12, BOOLEAN_Y_NUDGE);
-    if (opts.debug) console.log('[ADAM calibration] Boolean_12 Y +2 after ambient motion');
-  } else if (opts.debug) {
-    console.warn('[ADAM calibration] Boolean_12 not found');
+  if (opts.debug) {
+    console.group('[ADAM calibration] cluster-2 exact bottom alignment');
+    console.log('canonical baseline:', baselineY);
+    for (const item of aligned) console.log(item.path, 'world Y delta', item.deltaWorldY);
+    console.groupEnd();
   }
 
-  model.updateMatrixWorld(true);
   return motion;
 }
