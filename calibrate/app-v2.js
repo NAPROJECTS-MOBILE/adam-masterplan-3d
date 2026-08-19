@@ -48,23 +48,44 @@ strip.forEach(o => o.parent && o.parent.remove(o));
 /* ------------------------------------------------------- level site base
    The two large Main_Group Rectangle planes are authored in local XY, so a
    perfectly horizontal world plane is -90deg local X with zero Y/Z tilt.
-   This is the requested 0-degree world tilt: remove tiny export/inherited
-   lean without changing the model geometry. */
+   This is the user's requested "0 degree" world tilt. Normalize both direct
+   base layers explicitly so no tiny inherited/export rotation can make the
+   site or nearby blocks read unevenly. */
 const mainGroup = model.getObjectByName('Main_Group');
+let primaryBaseMesh = null;
 if (mainGroup) {
-  for (const o of mainGroup.children) {
+  const baseCandidates = [];
+
+  for (const o of [...mainGroup.children]) {
     if (!o.isMesh || !/^Rectangle(?:_\d+)?$/.test(o.name)) continue;
     o.geometry.computeBoundingBox();
     const bb = o.geometry.boundingBox;
     if (!bb) continue;
+
     const ext = bb.getSize(new THREE.Vector3());
     const isLargePlanarBase = ext.z < 1e-5 && ext.x > 1000 && ext.y > 1000;
     if (!isLargePlanarBase) continue;
+
+    // The source rectangle is authored in local XY. -90deg X maps its normal
+    // exactly onto +world Y. Main_Group and the GLB root have scale only, so
+    // this gives a mathematically horizontal plane with zero world tilt.
     o.rotation.set(-Math.PI / 2, 0, 0);
     o.updateMatrix();
     o.matrixWorldNeedsUpdate = true;
+    baseCandidates.push(o);
+  }
+
+  primaryBaseMesh = baseCandidates[0] || null;
+
+  // The fuller GLB contains TWO identical, perfectly coplanar Main_Group
+  // rectangles. Rendering both causes z-fighting and makes the ground look
+  // visually skewed/unstable. Keep the first (the user's M01) and remove only
+  // the exact duplicate from the runtime scene.
+  for (const duplicate of baseCandidates.slice(1)) {
+    duplicate.removeFromParent();
   }
 }
+
 model.updateWorldMatrix(true, true);
 
 const solids = [], flats = [];
@@ -94,8 +115,10 @@ model.traverse(o => {
 
 if (!solids.length) contentBox.setFromObject(model);
 flats.sort((a,b) => b.footprint - a.footprint);
-const slabMesh = flats[0]?.mesh || null;
-const pathMeshes = flats.slice(1).map(f => f.mesh);
+const slabMesh = primaryBaseMesh || flats[0]?.mesh || null;
+const pathMeshes = flats
+  .map(f => f.mesh)
+  .filter(m => m !== slabMesh && m.parent);
 
 const size = contentBox.getSize(new THREE.Vector3());
 const centre = contentBox.getCenter(new THREE.Vector3());
@@ -113,7 +136,9 @@ rimLight.position.set(-.7, .35, -.6).multiplyScalar(radius);
 /* ----------------------------------------------------------- Spline motion */
 const motion = createSplineMotion(model, { debug:true, unitScale:1, ambient:true });
 
-/* ------------------------------------------------------- moving edge layers */
+/* ------------------------------------------------------- moving edge layers
+   Edge/glow objects live under each mesh in LOCAL space, so transforms inherited
+   from b1 / b2 / both b2a groups move the lines with the buildings. */
 const edgeMat = new LineMaterial({ linewidth:1, transparent:true, depthTest:true });
 const glowMat = new LineMaterial({
   linewidth:3, transparent:true, depthTest:true, depthWrite:false,
@@ -133,14 +158,14 @@ function clearEdgeLayers() {
 }
 
 function isB10Prism(mesh) {
-  // b10 is built from overlapping extruded rectangles plus a thin top cap.
-  // Spline reads as one flat roof; outlining each prism's upper rim creates
-  // the false tiled/grid top. Keep side/vertical edges, remove upper-face rims.
+  // b10 is built from three overlapping extruded rectangles plus one thin cap.
+  // Spline presents the cap as one flat top; outlining each prism's upper rim
+  // creates the false tiled/grid top seen in Three.js.
   if (mesh.parent?.name !== 'b10') return false;
   mesh.geometry.computeBoundingBox();
   const bb = mesh.geometry.boundingBox;
   if (!bb) return false;
-  return (bb.max.z - bb.min.z) > 10;
+  return (bb.max.z - bb.min.z) > 10; // prisms ~=239 local units; cap ~=1
 }
 
 function edgeGeometryForMesh(mesh, angle) {
@@ -154,10 +179,13 @@ function edgeGeometryForMesh(mesh, angle) {
     const eps = Math.max(1e-4, (bb.max.z - bb.min.z) * 1e-4);
     const kept = [];
 
+    // EdgesGeometry stores segment endpoint pairs. Drop only segments whose
+    // two endpoints lie on the prism's upper face. Side/vertical edges remain.
     for (let i = 0; i < pos.count; i += 2) {
       const aTop = pos.getZ(i) >= topZ - eps;
       const bTop = pos.getZ(i + 1) >= topZ - eps;
       if (aTop && bTop) continue;
+
       kept.push(
         pos.getX(i), pos.getY(i), pos.getZ(i),
         pos.getX(i + 1), pos.getY(i + 1), pos.getZ(i + 1)
@@ -289,12 +317,18 @@ function applyStyle() {
   }
 
   if (slabMesh) {
+    // Treat the site plate as a visual backdrop rather than an occluding wall.
+    // Several source buildings intentionally extend a few millimetres below the
+    // nominal plate height; letting the plate write depth cuts their bases off
+    // unevenly and falsely reads as a tilted ground plane.
+    slabMesh.renderOrder = -20;
     eachMaterial(slabMesh, mat => {
       if (mat.color) mat.color.set(s.slab);
       if ('roughness' in mat) mat.roughness = s.slabRoughness;
       mat.transparent = true;
       mat.opacity = s.slabOpacity;
-      mat.depthWrite = true;
+      mat.depthTest = true;
+      mat.depthWrite = false;
       mat.needsUpdate = true;
     });
   }
