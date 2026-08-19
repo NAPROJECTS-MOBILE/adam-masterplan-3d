@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ADAM masterplan — camera calibration</title>
+<style>
+  :root{ --bg:#111; --panel:#191919; --line:#2e2e2e; --text:#e8e8e8; --dim:#8a8a8a; --accent:#c8f542; }
+  *{box-sizing:border-box;}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--text);
+    font:13px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;}
+  #app{display:flex;height:100%;}
+
+  #stage{flex:1;position:relative;overflow:hidden;background:#141414;display:grid;place-items:center;}
+  #frame{position:relative;width:100%;height:100%;background:#141414;}
+  #frame.portrait{width:min(390px,100%);height:min(844px,100%);outline:1px solid var(--line);}
+  .scene3d{position:absolute;inset:0;width:100%;height:100%;contain:strict;}
+  .scene3d canvas{display:block;width:100%;height:100%;}
+
+  #panel{width:330px;flex:0 0 330px;background:var(--panel);border-left:1px solid var(--line);
+    overflow-y:auto;padding:14px;}
+  h2{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--dim);
+    margin:18px 0 8px;border-bottom:1px solid var(--line);padding-bottom:5px;}
+  h2:first-child{margin-top:0;}
+
+  .kfrow{display:flex;gap:5px;margin-bottom:10px;}
+  .kfrow button{flex:1;padding:7px 0;background:#232323;color:var(--text);
+    border:1px solid var(--line);border-radius:3px;cursor:pointer;font:inherit;font-size:12px;}
+  .kfrow button.on{background:var(--accent);color:#111;border-color:var(--accent);font-weight:700;}
+
+  .ctl{margin-bottom:9px;}
+  .ctl label{display:flex;justify-content:space-between;font-size:11px;color:var(--dim);margin-bottom:2px;}
+  .ctl label span{color:var(--text);}
+  .ctl input[type=range]{width:100%;accent-color:var(--accent);}
+
+  .btn{width:100%;padding:9px;margin-top:6px;background:var(--accent);color:#111;border:0;
+    border-radius:3px;cursor:pointer;font:inherit;font-weight:700;}
+  .btn.ghost{background:#232323;color:var(--text);border:1px solid var(--line);font-weight:400;}
+
+  textarea{width:100%;height:150px;background:#0d0d0d;color:var(--accent);border:1px solid var(--line);
+    border-radius:3px;padding:8px;font:inherit;font-size:11px;resize:vertical;margin-top:8px;}
+  .note{font-size:11px;color:var(--dim);margin:6px 0 0;}
+  #status{font-size:11px;color:var(--dim);white-space:pre-wrap;}
+  .toggles{display:flex;gap:5px;flex-wrap:wrap;}
+  .toggles button{flex:1 1 auto;padding:6px 8px;background:#232323;color:var(--text);
+    border:1px solid var(--line);border-radius:3px;cursor:pointer;font:inherit;font-size:11px;}
+  .toggles button.on{border-color:var(--accent);color:var(--accent);}
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="stage">
+    <div id="frame">
+      <div class="scene3d" data-scene3d><canvas data-scene3d-canvas></canvas></div>
+    </div>
+  </div>
+
+  <div id="panel">
+    <h2>Keyframe</h2>
+    <div class="kfrow" id="kfrow"></div>
+    <div class="toggles">
+      <button id="playBtn">▶ Play through</button>
+    </div>
+
+    <h2>Camera</h2>
+    <div id="camCtls"></div>
+
+    <h2>Lighting</h2>
+    <div id="lightCtls"></div>
+    <p class="note">Lighting is global, not per-keyframe.</p>
+
+    <h2>View</h2>
+    <div class="toggles">
+      <button id="tPortrait">Portrait</button>
+      <button id="tGround" class="on">Ground</button>
+      <button id="tBounds">Bounds</button>
+      <button id="tGrid">Grid</button>
+    </div>
+
+    <h2>Export</h2>
+    <button class="btn" id="copyBtn">Copy KEYFRAMES + lighting</button>
+    <button class="btn ghost" id="resetBtn">Reset to defaults</button>
+    <textarea id="out" readonly></textarea>
+
+    <h2>Status</h2>
+    <div id="status">booting…</div>
+  </div>
+</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
+
+const MODEL_URL = './model/adam-masterplan.min.glb';
+const FLAT_THRESHOLD = 0.1;
+const GROUND_COLOR = 0x2e2e2e;
+const ACCENT = 0xc8f542;
+
+const DEFAULTS = {
+  keyframes: [
+    { azimuth:  30, elevation: 34, zoom: 1.00, panX:  0.00, panZ: 0.00 },
+    { azimuth:   4, elevation: 19, zoom: 0.60, panX:  0.16, panZ: 0.04 },
+    { azimuth: -26, elevation: 56, zoom: 0.74, panX: -0.14, panZ: 0.00 },
+    { azimuth: -56, elevation: 27, zoom: 0.92, panX: -0.02, panZ: 0.02 }
+  ],
+  light: { hemisphere: 0.6, key: 1.4, rim: 0.5, exposure: 0.85 }
+};
+
+const state = structuredClone(DEFAULTS);
+let active = 0, playing = false, playT = 0;
+
+const statusEl = document.getElementById('status');
+const setStatus = (s) => { statusEl.textContent = s; };
+
+const root = document.querySelector('[data-scene3d]');
+const canvas = root.querySelector('[data-scene3d-canvas]');
+const frameEl = document.getElementById('frame');
+
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false });
+renderer.setPixelRatio(Math.min(devicePixelRatio || 1, 1.75));
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = state.light.exposure;
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x141414);
+const camera = new THREE.PerspectiveCamera(38, 1, 0.1, 4000);
+
+const hemi = new THREE.HemisphereLight(0xffffff, 0x9a9a9a, state.light.hemisphere);
+const key  = new THREE.DirectionalLight(0xfff6e8, state.light.key);
+const rim  = new THREE.DirectionalLight(ACCENT, state.light.rim);
+scene.add(hemi, key, rim);
+
+setStatus('loading model…');
+const loader = new GLTFLoader();
+loader.setMeshoptDecoder(MeshoptDecoder);
+const gltf = await loader.loadAsync(MODEL_URL);
+const model = gltf.scene;
+
+const strip = [];
+model.traverse(o => { if (o.isCamera || o.isLight) strip.push(o); });
+strip.forEach(o => o.parent && o.parent.remove(o));
+model.updateWorldMatrix(true, true);
+
+// Same filter as production: flat meshes render but don't drive the camera.
+const contentBox = new THREE.Box3();
+const flatMeshes = [];
+let solidCount = 0;
+model.traverse((o) => {
+  if (!o.isMesh) return;
+  const b = new THREE.Box3().setFromObject(o);
+  if (b.getSize(new THREE.Vector3()).y >= FLAT_THRESHOLD) { contentBox.union(b); solidCount++; }
+  else flatMeshes.push(o);
+});
+if (solidCount === 0) contentBox.setFromObject(model);
+
+for (const m of flatMeshes) {
+  m.material = m.material.clone();
+  m.material.color = new THREE.Color(GROUND_COLOR);
+}
+
+const size = contentBox.getSize(new THREE.Vector3());
+const centre = contentBox.getCenter(new THREE.Vector3());
+const sphere = new THREE.Sphere();
+contentBox.getBoundingSphere(sphere);
+const radius = sphere.radius;
+
+model.position.sub(centre);
+scene.add(model);
+
+key.position.set(0.45, 1.0, 0.55).multiplyScalar(radius);
+rim.position.set(-0.7, 0.35, -0.6).multiplyScalar(radius);
+
+const boundsHelper = new THREE.Box3Helper(
+  contentBox.clone().translate(centre.clone().negate()), 0x00ff88
+);
+boundsHelper.visible = false;
+scene.add(boundsHelper);
+
+const grid = new THREE.GridHelper(radius * 4, 24, 0x444444, 0x262626);
+grid.visible = false;
+scene.add(grid);
+
+setStatus(
+  `solid meshes ${solidCount} · flat ${flatMeshes.length}\n` +
+  `filtered ${size.x.toFixed(1)} x ${size.y.toFixed(1)} x ${size.z.toFixed(1)}\n` +
+  `radius ${radius.toFixed(2)}`
+);
+
+// ---- Sizing ----
+let fitDist = radius * 3;
+function computeFit () {
+  const vFov = camera.fov * Math.PI / 180;
+  const hFov = 2 * Math.atan(Math.tan(vFov / 2) * camera.aspect);
+  fitDist = Math.max(radius / Math.sin(vFov / 2), radius / Math.sin(hFov / 2));
+}
+function resize () {
+  const r = root.getBoundingClientRect();
+  const w = Math.max(1, Math.round(r.width));
+  const h = Math.max(1, Math.round(r.height));
+  renderer.setSize(w, h, false);
+  camera.aspect = w / h;
+  camera.fov = h > w ? 50 : 38;
+  camera.updateProjectionMatrix();
+  computeFit();
+}
+new ResizeObserver(resize).observe(root);
+resize();
+
+// ---- Camera ----
+const look = new THREE.Vector3();
+const lerp = (a,b,t) => a + (b-a)*t;
+const ease = (t) => t < 0.5 ? 4*t*t*t : 1 - Math.pow(-2*t+2,3)/2;
+
+function poseAt (kf) {
+  const az = kf.azimuth * Math.PI / 180;
+  const el = kf.elevation * Math.PI / 180;
+  look.set(kf.panX * size.x, 0, kf.panZ * size.z);
+  const d = fitDist * kf.zoom;
+  camera.position.set(
+    look.x + Math.sin(az) * Math.cos(el) * d,
+    look.y + Math.sin(el) * d,
+    look.z + Math.cos(az) * Math.cos(el) * d
+  );
+  camera.lookAt(look);
+}
+
+function poseLerp (t) {
+  const K = state.keyframes;
+  const seg = t * (K.length - 1);
+  const i = Math.min(K.length - 2, Math.floor(seg));
+  const f = ease(seg - i);
+  const a = K[i], b = K[i+1];
+  poseAt({
+    azimuth: lerp(a.azimuth, b.azimuth, f),
+    elevation: lerp(a.elevation, b.elevation, f),
+    zoom: lerp(a.zoom, b.zoom, f),
+    panX: lerp(a.panX, b.panX, f),
+    panZ: lerp(a.panZ, b.panZ, f)
+  });
+}
+
+// ---- UI ----
+const SPECS = [
+  { k:'azimuth',   min:-180, max:180, step:1,    label:'Azimuth °' },
+  { k:'elevation', min:2,    max:89,  step:1,    label:'Elevation °' },
+  { k:'zoom',      min:0.15, max:2,   step:0.01, label:'Zoom' },
+  { k:'panX',      min:-0.6, max:0.6, step:0.01, label:'Pan X' },
+  { k:'panZ',      min:-0.6, max:0.6, step:0.01, label:'Pan Z' }
+];
+const LIGHTS = [
+  { k:'hemisphere', min:0, max:3, step:0.05, label:'Hemisphere' },
+  { k:'key',        min:0, max:4, step:0.05, label:'Key' },
+  { k:'rim',        min:0, max:2, step:0.05, label:'Rim (lime)' },
+  { k:'exposure',   min:0.2, max:2, step:0.01, label:'ACES exposure' }
+];
+
+const kfrow = document.getElementById('kfrow');
+state.keyframes.forEach((_, i) => {
+  const b = document.createElement('button');
+  b.textContent = '0' + (i + 1);
+  b.onclick = () => { active = i; playing = false; syncUI(); };
+  kfrow.appendChild(b);
+});
+
+function buildCtls (host, specs, get, set) {
+  host.innerHTML = '';
+  for (const s of specs) {
+    const wrap = document.createElement('div');
+    wrap.className = 'ctl';
+    wrap.innerHTML = `<label>${s.label}<span data-v></span></label>`;
+    const input = document.createElement('input');
+    Object.assign(input, { type:'range', min:s.min, max:s.max, step:s.step });
+    input.oninput = () => { set(s.k, parseFloat(input.value)); syncUI(); };
+    wrap.appendChild(input);
+    wrap._input = input;
+    wrap._key = s.k;
+    wrap._get = get;
+    host.appendChild(wrap);
+  }
+}
+const camHost = document.getElementById('camCtls');
+const lightHost = document.getElementById('lightCtls');
+buildCtls(camHost, SPECS, () => state.keyframes[active], (k,v) => { state.keyframes[active][k] = v; });
+buildCtls(lightHost, LIGHTS, () => state.light, (k,v) => {
+  state.light[k] = v;
+  hemi.intensity = state.light.hemisphere;
+  key.intensity = state.light.key;
+  rim.intensity = state.light.rim;
+  renderer.toneMappingExposure = state.light.exposure;
+});
+
+function syncUI () {
+  [...kfrow.children].forEach((b,i) => b.classList.toggle('on', i === active && !playing));
+  for (const host of [camHost, lightHost]) {
+    for (const wrap of host.children) {
+      const v = wrap._get()[wrap._key];
+      wrap._input.value = v;
+      wrap.querySelector('[data-v]').textContent =
+        (Math.abs(v) < 10 ? v.toFixed(2) : v.toFixed(0));
+    }
+  }
+  document.getElementById('out').value = serialise();
+}
+
+function serialise () {
+  const K = state.keyframes.map(k =>
+    `  { azimuth: ${k.azimuth.toFixed(0).padStart(4)}, elevation: ${k.elevation.toFixed(0).padStart(2)}, ` +
+    `zoom: ${k.zoom.toFixed(2)}, panX: ${k.panX.toFixed(2).padStart(5)}, panZ: ${k.panZ.toFixed(2).padStart(5)} }`
+  ).join(',\n');
+  const L = state.light;
+  return `const KEYFRAMES = [\n${K}\n];\n\n` +
+    `light: {\n  hemisphere: ${L.hemisphere},\n  key: ${L.key},\n` +
+    `  rim: ${L.rim},\n  exposure: ${L.exposure}\n}`;
+}
+
+document.getElementById('copyBtn').onclick = async () => {
+  const text = serialise();
+  try { await navigator.clipboard.writeText(text); setStatus('copied to clipboard'); }
+  catch { document.getElementById('out').select(); setStatus('select the textarea and copy manually'); }
+};
+document.getElementById('resetBtn').onclick = () => {
+  Object.assign(state, structuredClone(DEFAULTS));
+  hemi.intensity = state.light.hemisphere;
+  key.intensity = state.light.key;
+  rim.intensity = state.light.rim;
+  renderer.toneMappingExposure = state.light.exposure;
+  syncUI();
+};
+document.getElementById('playBtn').onclick = () => { playing = !playing; playT = 0; syncUI(); };
+
+const toggle = (id, fn) => {
+  const b = document.getElementById(id);
+  b.onclick = () => { b.classList.toggle('on'); fn(b.classList.contains('on')); };
+};
+toggle('tPortrait', on => { frameEl.classList.toggle('portrait', on); requestAnimationFrame(resize); });
+toggle('tGround',   on => flatMeshes.forEach(m => m.visible = on));
+toggle('tBounds',   on => boundsHelper.visible = on);
+toggle('tGrid',     on => grid.visible = on);
+document.getElementById('tGround').classList.add('on');
+
+syncUI();
+
+(function loop () {
+  requestAnimationFrame(loop);
+  if (playing) {
+    playT = (playT + 0.0022) % 1;
+    poseLerp(playT);
+  } else {
+    poseAt(state.keyframes[active]);
+  }
+  renderer.render(scene, camera);
+})();
+</script>
+</body>
+</html>
