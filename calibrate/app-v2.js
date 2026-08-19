@@ -77,6 +77,15 @@ if (mainGroup) {
 
   primaryBaseMesh = baseCandidates[0] || null;
 
+  // Small visual calibration test: lower only the primary M01 plate by five
+  // source/local units. Through the GLB parent scales this is a very small
+  // downward world-space nudge (roughly a few screen pixels in this view).
+  if (primaryBaseMesh) {
+    primaryBaseMesh.position.y -= 5;
+    primaryBaseMesh.updateMatrix();
+    primaryBaseMesh.matrixWorldNeedsUpdate = true;
+  }
+
   // The fuller GLB contains TWO identical, perfectly coplanar Main_Group
   // rectangles. Rendering both causes z-fighting and makes the ground look
   // visually skewed/unstable. Keep the first (the user's M01) and remove only
