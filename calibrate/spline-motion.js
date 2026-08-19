@@ -1,4 +1,4 @@
-/* ADAM Spline motion v5.2 — 53 visible targets.
+/* ADAM Spline motion v5.3 — 53 visible targets.
    Cluster-4 strip fixes:
    1. Rectangle_5 is co-located with mesh_9_instance_5, so the complete
       10-child replica parent moves with it and no hidden duplicate is exposed.
@@ -30,8 +30,28 @@ function hasGeo(o){let x=false;o.traverse(c=>{if(c.isMesh)x=true});return x}
 function snap(o){return{p:o.position.clone(),q:o.quaternion.clone(),s:o.scale.clone()}}
 function restore(o,b){o.position.copy(b.p);o.quaternion.copy(b.q);o.scale.copy(b.s);o.updateMatrix();o.matrixWorldNeedsUpdate=true}
 
+const LEVEL_STATIC_PATHS=[
+ 'Scene_1/Main_Group/clusters/cluster_2/Rectangle_2_5',
+ 'Scene_1/Main_Group/clusters/cluster_2/Rectangle_10',
+ 'Scene_1/Main_Group/clusters/cluster_2/Rectangle_3_2'
+];
+
 export function createSplineMotion(model,opts={}){
  const {debug=false,unitScale=1,ambient=true}=opts,bound=[],amb=[],unresolved=[],inert=[];
+
+ // These three cluster-2 pad/blocks are exported at ~-87deg X, which makes
+ // their top faces visibly slope into the base. Their parent cluster_2 has
+ // no rotation, so -90deg local X is exactly horizontal in world space.
+ const levelled=[];
+ for(const path of LEVEL_STATIC_PATHS){
+  const o=find(model,path);
+  if(!o){unresolved.push({key:'level-static',type:'level',path});continue}
+  o.matrixAutoUpdate=true;
+  o.rotation.set(-Math.PI/2,0,0);
+  o.updateMatrix();o.matrixWorldNeedsUpdate=true;
+  levelled.push(path);
+ }
+ model.updateMatrixWorld(true);
 
  for(const t of TRACKS){
   const o=find(model,t.path);
@@ -49,12 +69,13 @@ export function createSplineMotion(model,opts={}){
 
  const expected=AMBIENT_DRIVERS.reduce((n,d)=>n+d.n,0),count=amb.reduce((n,b)=>n+b.d.n,0);
  if(debug){
-  console.group('[spline-motion v5.2]');
+  console.group('[spline-motion v5.3]');
   for(const b of bound)console.log('scroll',b.t.key,pathOf(b.o));
   for(const b of amb)console.log('ambient',b.d.k,b.d.m.join(','),b.d.parentOf?'FULL replica parent':pathOf(b.o));
   for(const x of inert)console.warn('INERT',x);
   if(unresolved.length)console.error('UNRESOLVED',unresolved);
   console.log(`ambient visual targets: ${count}/${expected}`);
+  console.log('levelled cluster-2 pads:',levelled);
   console.groupEnd()
  }
 
