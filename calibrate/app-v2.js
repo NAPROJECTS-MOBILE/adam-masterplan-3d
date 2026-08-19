@@ -44,6 +44,27 @@ const model = gltf.scene;
 const strip = [];
 model.traverse(o => { if (o.isCamera || o.isLight) strip.push(o); });
 strip.forEach(o => o.parent && o.parent.remove(o));
+
+/* ------------------------------------------------------- level site base
+   The two large Main_Group Rectangle planes are authored in local XY, so a
+   perfectly horizontal world plane is -90deg local X with zero Y/Z tilt.
+   This is the requested 0-degree world tilt: remove tiny export/inherited
+   lean without changing the model geometry. */
+const mainGroup = model.getObjectByName('Main_Group');
+if (mainGroup) {
+  for (const o of mainGroup.children) {
+    if (!o.isMesh || !/^Rectangle(?:_\d+)?$/.test(o.name)) continue;
+    o.geometry.computeBoundingBox();
+    const bb = o.geometry.boundingBox;
+    if (!bb) continue;
+    const ext = bb.getSize(new THREE.Vector3());
+    const isLargePlanarBase = ext.z < 1e-5 && ext.x > 1000 && ext.y > 1000;
+    if (!isLargePlanarBase) continue;
+    o.rotation.set(-Math.PI / 2, 0, 0);
+    o.updateMatrix();
+    o.matrixWorldNeedsUpdate = true;
+  }
+}
 model.updateWorldMatrix(true, true);
 
 const solids = [], flats = [];
@@ -111,11 +132,43 @@ function clearEdgeLayers() {
   glowLayers = [];
 }
 
+function isB10Prism(mesh) {
+  // b10 is built from overlapping extruded rectangles plus a thin top cap.
+  // Spline reads as one flat roof; outlining each prism's upper rim creates
+  // the false tiled/grid top. Keep side/vertical edges, remove upper-face rims.
+  if (mesh.parent?.name !== 'b10') return false;
+  mesh.geometry.computeBoundingBox();
+  const bb = mesh.geometry.boundingBox;
+  if (!bb) return false;
+  return (bb.max.z - bb.min.z) > 10;
+}
+
 function edgeGeometryForMesh(mesh, angle) {
   const eg = new THREE.EdgesGeometry(mesh.geometry, angle);
   const pos = eg.attributes.position;
-  const arr = new Float32Array(pos.count * 3);
-  arr.set(pos.array);
+
+  let arr;
+  if (isB10Prism(mesh)) {
+    const bb = mesh.geometry.boundingBox;
+    const topZ = bb.max.z;
+    const eps = Math.max(1e-4, (bb.max.z - bb.min.z) * 1e-4);
+    const kept = [];
+
+    for (let i = 0; i < pos.count; i += 2) {
+      const aTop = pos.getZ(i) >= topZ - eps;
+      const bTop = pos.getZ(i + 1) >= topZ - eps;
+      if (aTop && bTop) continue;
+      kept.push(
+        pos.getX(i), pos.getY(i), pos.getZ(i),
+        pos.getX(i + 1), pos.getY(i + 1), pos.getZ(i + 1)
+      );
+    }
+    arr = new Float32Array(kept);
+  } else {
+    arr = new Float32Array(pos.count * 3);
+    arr.set(pos.array);
+  }
+
   eg.dispose();
   const geo = new LineSegmentsGeometry();
   geo.setPositions(arr);
