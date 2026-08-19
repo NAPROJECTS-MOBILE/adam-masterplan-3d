@@ -10,8 +10,6 @@ import { createSplineMotion } from './spline-motion.js';
 const $ = id => document.getElementById(id);
 const setStatus = s => $('status').textContent = s;
 
-// Seed useful reveal milestones from the recovered Spline window. You can add/delete
-// arbitrary camera keyframes; object reveal progress remains independent per frame.
 const seededMotion = [0, 0.027, 0.667, 1, 1];
 const state = {
   keyframes: seededMotion.map(motionProgress => ({ ...START_POSE, motionProgress })),
@@ -92,11 +90,9 @@ keyLight.position.set(.45, 1, .55).multiplyScalar(radius);
 rimLight.position.set(-.7, .35, -.6).multiplyScalar(radius);
 
 /* ----------------------------------------------------------- Spline motion */
-const motion = createSplineMotion(model, { debug:true, unitScale:1 });
+const motion = createSplineMotion(model, { debug:true, unitScale:1, ambient:true });
 
-/* ------------------------------------------------------- moving edge layers
-   Edge/glow objects live under each mesh in LOCAL space, so transforms inherited
-   from b1 / b2 / both b2a groups move the lines with the buildings. */
+/* ------------------------------------------------------- moving edge layers */
 const edgeMat = new LineMaterial({ linewidth:1, transparent:true, depthTest:true });
 const glowMat = new LineMaterial({
   linewidth:3, transparent:true, depthTest:true, depthWrite:false,
@@ -201,10 +197,11 @@ scene.add(boundsHelper, grid);
 
 const motionStatus = motion.unresolved.length
   ? ` · motion unresolved ${motion.unresolved.length}`
-  : ` · motion ${motion.bound.length}/4`;
+  : ` · motion ${motion.bound.length}/${motion.bound.length + motion.inert.length}`;
+const ambientStatus = motion.hasAmbient ? ` · ambient ${motion.spins.length}` : '';
 setStatus(
   `solid ${solids.length} · flat ${flats.length} · slab "${slabMesh ? slabMesh.name : 'none'}"\n` +
-  `filtered ${size.x.toFixed(1)} x ${size.y.toFixed(1)} x ${size.z.toFixed(1)} · r ${radius.toFixed(2)}${motionStatus}`
+  `filtered ${size.x.toFixed(1)} x ${size.y.toFixed(1)} x ${size.z.toFixed(1)} · r ${radius.toFixed(2)}${motionStatus}${ambientStatus}`
 );
 
 /* ------------------------------------------------------------- appearance */
@@ -335,8 +332,6 @@ function applyTimeline(t) {
     panZ:lerp(a.panZ,b.panZ,f)
   });
 
-  // Spline reveal has its own original cubic easing inside createSplineMotion().
-  // Keep this mapping linear so the extracted object motion is not eased twice.
   motion.setProgress(lerp(a.motionProgress ?? 0, b.motionProgress ?? 0, raw));
 }
 
@@ -495,7 +490,14 @@ function syncUI() {
 
   $('out').value = serialise();
   const mapped = motion.bound.map(b => b.key).join(', ');
-  setStatus(`fuller model · ${solids.length} solid / ${flats.length} flat\nSpline reveal mapped: ${mapped || 'none'}\nframes: ${state.keyframes.length} · selected ${String(active).padStart(2,'0')} · reveal ${(state.keyframes[active].motionProgress ?? 0).toFixed(3)}`);
+  const spinning = motion.spins.map(s => s.key).join(', ');
+  const inert = motion.inert.map(i => i.key).join(', ');
+  setStatus(
+    `fuller model · ${solids.length} solid / ${flats.length} flat\n` +
+    `Spline reveal mapped: ${mapped || 'none'}\n` +
+    `ambient: ${spinning || 'none'}${inert ? ` · inert: ${inert}` : ''}\n` +
+    `frames: ${state.keyframes.length} · selected ${String(active).padStart(2,'0')} · reveal ${(state.keyframes[active].motionProgress ?? 0).toFixed(3)}`
+  );
 }
 
 renderKeyframeButtons();
@@ -506,8 +508,11 @@ let lastDot = 0;
 (function loop(now) {
   requestAnimationFrame(loop);
 
+  const seconds = now * .001;
+  if (motion.hasAmbient) motion.setAmbientTime(seconds);
+
   if (animateDots && now - lastDot >= 33) {
-    dotUniforms.uTime.value = now * .001;
+    dotUniforms.uTime.value = seconds;
     lastDot = now;
   }
 
