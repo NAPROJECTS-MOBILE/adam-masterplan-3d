@@ -1,17 +1,14 @@
 import * as THREE from 'three';
 
 /*
-  ADAM calibrator — architectural flat material sync v2
+  ADAM calibrator — architectural flat material sync v3
 
-  These two meshes are physically very thin in the GLB, so app-v2 classifies
-  them as `flats` rather than `solids` and the normal Building Material loop
-  skips them.
+  These five architectural meshes are physically very thin in the GLB, so
+  app-v2 classifies them as `flats` rather than `solids` and the normal
+  Building Material loop skips them.
 
-  Previous version tried to copy a separate source mesh's live material. That
-  was too brittle because it depended on that source path resolving exactly.
-
-  This version reads the GLOBAL Building Material controls themselves and
-  applies those values directly to the two exact GLB targets on every render.
+  This module reads the GLOBAL Building Material controls themselves and
+  applies those values directly to the five exact GLB targets on every render.
   They therefore follow Face colour, colour strength, white lift, opacity,
   roughness and metalness for every keyframe, without reclassifying them as
   solids or adding unwanted edge/glow geometry.
@@ -19,7 +16,10 @@ import * as THREE from 'three';
 
 const TARGET_PATHS = new Set([
   'Scene_1/Main_Group/clusters/cluster_1/floor',
-  'Scene_1/Main_Group/clusters/cluster_1/b10/Rectangle_9'
+  'Scene_1/Main_Group/clusters/cluster_1/b10/Rectangle_9',
+  'Scene_1/Main_Group/clusters/cluster_2/Rectangle_2_5',
+  'Scene_1/Main_Group/clusters/cluster_2/Rectangle_10',
+  'Scene_1/Main_Group/clusters/cluster_2/Rectangle_3_2'
 ]);
 
 const originals = new WeakMap();
@@ -67,12 +67,12 @@ function resolve(scene) {
   if (signature !== lastResolutionSignature) {
     lastResolutionSignature = signature;
     console.info(
-      `[ADAM material sync v2] resolved ${targets.length}/${TARGET_PATHS.size}:`,
+      `[ADAM material sync v3] resolved ${targets.length}/${TARGET_PATHS.size}:`,
       targets.map(t => t.path)
     );
 
     const missing = [...TARGET_PATHS].filter(path => !targets.some(t => t.path === path));
-    if (missing.length) console.warn('[ADAM material sync v2] unresolved targets:', missing);
+    if (missing.length) console.warn('[ADAM material sync v3] unresolved targets:', missing);
   }
 }
 
