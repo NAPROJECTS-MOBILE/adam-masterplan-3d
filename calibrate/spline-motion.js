@@ -1,4 +1,4 @@
-// ADAM calibration motion wrapper — v5.4 + explicit cluster-2 clearance
+// ADAM calibration motion wrapper — v5.5 + explicit floor clearance
 //
 // v5.4 fixes an important timeline sampling bug in the pinned v5.3 core:
 // b2a's first authored key is at Spline t=1.50 with scaleY=0. Before that
@@ -6,22 +6,20 @@
 // instead returning the first key for every earlier time, which flattened the
 // b2a geometry into the base plane from t=1.00 through 1.50.
 //
+// v5.5 also lowers the user-identified cluster_1/floor mesh by exactly 2 local
+// units, using the same small visual-clearance convention as the earlier pad
+// corrections. The floor is static, so the offset is applied once from its
+// captured GLB base Y and re-applied absolutely on reset (never accumulated).
+//
 // We preserve the original local transform for both real b2a branches until
 // t=1.50, then hand control back to the authoritative Spline keyframes.
-// This specifically restores visibility for the user-identified inner branch:
-//   b2/b2_1/b2a/Group_4/Rectangle_29
-//   b2/b2_1/b2a/Group_4/mesh_51_instance_2
-//   b2/b2_1/b2a/Group_4/mesh_51_instance_3
-//   b2/b2_1/b2a/Group_4/Rectangle_7
-//   b2/b2_1/b2a/Group_4_1/Rectangle_29_1
-// Rectangle_4 sits outside b2a under b2_1 and continues to inherit only the
-// outer b2 movement, as intended.
 
 export { MOTION_WINDOW, TRACKS, AMBIENT_DRIVERS } from 'https://cdn.jsdelivr.net/gh/NAPROJECTS-MOBILE/adam-masterplan-3d@8de5103d184ab80037f788834abe3d748cc50c99/calibrate/spline-motion.js';
 import { createSplineMotion as createCoreSplineMotion } from 'https://cdn.jsdelivr.net/gh/NAPROJECTS-MOBILE/adam-masterplan-3d@8de5103d184ab80037f788834abe3d748cc50c99/calibrate/spline-motion.js';
 
 const PAD_DOWN = -2;
 const BLOCK_UP = 2;
+const FLOOR_DOWN = -2;
 const MOTION_START = 1.0;
 const MOTION_END = 1.75;
 const B2A_FIRST_KEY = 1.5;
@@ -31,6 +29,8 @@ const PAD_PATHS = [
   'Scene_1/Main_Group/clusters/cluster_2/Rectangle_2_5',
   'Scene_1/Main_Group/clusters/cluster_2/Rectangle_3_2'
 ];
+
+const FLOOR_PATH = 'Scene_1/Main_Group/clusters/cluster_1/floor';
 
 const B2A_PATHS = [
   'Scene_1/Main_Group/clusters/cluster_1/b2/b2a_1',
@@ -61,6 +61,13 @@ function nudgeY(node, amount) {
   node.matrixWorldNeedsUpdate = true;
 }
 
+function setAbsoluteY(node, y) {
+  if (!node) return;
+  node.position.y = y;
+  node.updateMatrix();
+  node.matrixWorldNeedsUpdate = true;
+}
+
 function captureLocal(node) {
   return node ? {
     position: node.position.clone(),
@@ -86,6 +93,10 @@ export function createSplineMotion(model, opts = {}) {
     return { path, node, base: captureLocal(node) };
   });
 
+  // Capture the static floor's authored GLB Y before applying any calibration.
+  const floor = findByPath(model, FLOOR_PATH);
+  const floorBaseY = floor?.position.y ?? null;
+
   const motion = createCoreSplineMotion(model, opts);
 
   // Fix pre-first-key semantics for b2a. The pinned core's sample() returns
@@ -105,22 +116,23 @@ export function createSplineMotion(model, opts = {}) {
     };
   }
 
-  // These three meshes are the flat footprint/pad planes directly under the
-  // cluster-2 architecture. Drop them by the same explicit two-unit visual
-  // clearance requested earlier for Rectangle_3_2. This exposes the lower
-  // building edge/glow without changing the buildings' animation.
+  // Existing cluster-2 visual clearances.
   const pads = PAD_PATHS.map(path => ({ path, node: findByPath(model, path) }));
   for (const { path, node } of pads) {
     if (node) nudgeY(node, PAD_DOWN);
     else if (opts.debug) console.warn('[ADAM calibration] pad not found:', path);
   }
 
-  // Rectangle_19_1 is actual extruded building geometry, not a ground pad.
-  // Give it the same +2 lower-edge clearance treatment that visibly fixed
-  // Boolean_12.
   const rectangle19 = findByPath(model, RECTANGLE_19);
   if (rectangle19) nudgeY(rectangle19, BLOCK_UP);
   else if (opts.debug) console.warn('[ADAM calibration] Rectangle_19_1 not found');
+
+  // User-requested cluster-1 floor correction: exactly 2 local units lower.
+  // Set from the captured authored Y so refresh/reset can never compound it.
+  const applyFloorOffset = () => {
+    if (floor && floorBaseY != null) setAbsoluteY(floor, floorBaseY + FLOOR_DOWN);
+  };
+  applyFloorOffset();
 
   // Boolean_12 is ambient-driven and the core rewrites its transform each RAF,
   // so its +2 must be reapplied after every authoritative Spline update.
@@ -139,20 +151,24 @@ export function createSplineMotion(model, opts = {}) {
     motion.reset = () => {
       coreReset();
       if (boolean12) nudgeY(boolean12, BLOCK_UP);
+      applyFloorOffset();
       model.updateMatrixWorld(true);
     };
   }
 
   if (boolean12) nudgeY(boolean12, BLOCK_UP);
+  applyFloorOffset();
   model.updateMatrixWorld(true);
 
   if (opts.debug) {
-    console.group('[ADAM calibration] v5.4 fixes');
+    console.group('[ADAM calibration] v5.5 fixes');
     console.log('b2a pre-key base preserved until Spline t=1.50:',
       b2aPreKey.map(x => ({ path: x.path, found: !!x.node })));
     console.log('pads Y', PAD_DOWN, PAD_PATHS);
     console.log('Rectangle_19_1 Y', BLOCK_UP);
     console.log('Boolean_12 Y', BLOCK_UP, '(after ambient each frame)');
+    console.log('cluster_1/floor Y', FLOOR_DOWN,
+      floor ? `(base ${floorBaseY} -> ${floorBaseY + FLOOR_DOWN})` : '(not found)');
     console.groupEnd();
   }
 
