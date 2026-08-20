@@ -23,12 +23,7 @@ export const NO_RIM_GLOW_PATHS = new Set([
   'Scene_1/Main_Group/clusters/cluster_3/villa/Rectangle_2_4',
   'Scene_1/Main_Group/clusters/cluster_3/villa_Instance_2/Rectangle_2_2',
   'Scene_1/Main_Group/clusters/cluster_3/villa_Instance_3/Rectangle_2_1',
-  'Scene_1/Main_Group/clusters/cluster_3/villa_Instance/Rectangle_2_3',
-  'Scene_1/Main_Group/clusters/cluster_2/Rectangle_3_2',
-  'Scene_1/Main_Group/clusters/cluster_2/Rectangle_10',
-  'Scene_1/Main_Group/clusters/cluster_2/Rectangle_2_5',
-  'Scene_1/Main_Group/clusters/cluster_1/floor',
-  'Scene_1/Main_Group/clusters/cluster_1/b10/Rectangle_9'
+  'Scene_1/Main_Group/clusters/cluster_3/villa_Instance/Rectangle_2_3'
 ]);
 
 function pathOf(object) {
