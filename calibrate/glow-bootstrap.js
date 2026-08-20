@@ -35,7 +35,7 @@ THREE.Box3.prototype.getSize = function(target) {
 };
 
 try {
-  await import('./app-v2.js?v=cal-517-static-roof-bars-20260820-1205');
+  await import('./app-v2.js?v=cal-518-static-roof-bars-up15-20260820-1216');
 } finally {
   THREE.Box3.prototype.setFromObject = originalSetFromObject;
   THREE.Box3.prototype.getSize = originalGetSize;
