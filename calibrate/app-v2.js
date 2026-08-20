@@ -6,6 +6,7 @@ import { LineSegmentsGeometry } from 'three/addons/lines/LineSegmentsGeometry.js
 import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 import { MODEL_URL, FLAT_THRESHOLD, START_POSE, PRESETS, CAM, LIGHT, FACE, SLAB, EDGE, GLOW, DOTS } from './config.js';
 import { createSplineMotion } from './spline-motion.js';
+import { FORCE_GLOW_PATHS } from './glow-targets.js';
 
 const $ = id => document.getElementById(id);
 const setStatus = s => $('status').textContent = s;
@@ -45,12 +46,17 @@ const strip = [];
 model.traverse(o => { if (o.isCamera || o.isLight) strip.push(o); });
 strip.forEach(o => o.parent && o.parent.remove(o));
 
-/* ------------------------------------------------------- level site base
-   The two large Main_Group Rectangle planes are authored in local XY, so a
-   perfectly horizontal world plane is -90deg local X with zero Y/Z tilt.
-   This is the user's requested "0 degree" world tilt. Normalize both direct
-   base layers explicitly so no tiny inherited/export rotation can make the
-   site or nearby blocks read unevenly. */
+const glbPathOf = object => {
+  const parts = [];
+  let node = object;
+  while (node) {
+    if (node.name) parts.push(node.name);
+    node = node.parent;
+  }
+  return parts.reverse().join('/');
+};
+
+/* ------------------------------------------------------- level site base */
 const mainGroup = model.getObjectByName('Main_Group');
 let primaryBaseMesh = null;
 if (mainGroup) {
@@ -66,9 +72,6 @@ if (mainGroup) {
     const isLargePlanarBase = ext.z < 1e-5 && ext.x > 1000 && ext.y > 1000;
     if (!isLargePlanarBase) continue;
 
-    // The source rectangle is authored in local XY. -90deg X maps its normal
-    // exactly onto +world Y. Main_Group and the GLB root have scale only, so
-    // this gives a mathematically horizontal plane with zero world tilt.
     o.rotation.set(-Math.PI / 2, 0, 0);
     o.updateMatrix();
     o.matrixWorldNeedsUpdate = true;
@@ -77,22 +80,13 @@ if (mainGroup) {
 
   primaryBaseMesh = baseCandidates[0] || null;
 
-  // Small visual calibration test: lower only the primary M01 plate by five
-  // source/local units. Through the GLB parent scales this is a very small
-  // downward world-space nudge (roughly a few screen pixels in this view).
   if (primaryBaseMesh) {
     primaryBaseMesh.position.y -= 5;
     primaryBaseMesh.updateMatrix();
     primaryBaseMesh.matrixWorldNeedsUpdate = true;
   }
 
-  // The fuller GLB contains TWO identical, perfectly coplanar Main_Group
-  // rectangles. Rendering both causes z-fighting and makes the ground look
-  // visually skewed/unstable. Keep the first (the user's M01) and remove only
-  // the exact duplicate from the runtime scene.
-  for (const duplicate of baseCandidates.slice(1)) {
-    duplicate.removeFromParent();
-  }
+  for (const duplicate of baseCandidates.slice(1)) duplicate.removeFromParent();
 }
 
 model.updateWorldMatrix(true, true);
@@ -100,6 +94,7 @@ model.updateWorldMatrix(true, true);
 const solids = [], flats = [];
 const originals = new Map();
 const contentBox = new THREE.Box3();
+const forcedGlowResolved = new Set();
 
 model.traverse(o => {
   if (!o.isMesh) return;
@@ -112,15 +107,27 @@ model.traverse(o => {
   if (Array.isArray(o.material)) o.material = o.material.map(m => m.clone());
   else o.material = o.material.clone();
 
+  const path = glbPathOf(o);
+  const forceGlow = FORCE_GLOW_PATHS.has(path);
+  if (forceGlow) forcedGlowResolved.add(path);
+
   const b = new THREE.Box3().setFromObject(o);
   const s = b.getSize(new THREE.Vector3());
-  if (s.y >= FLAT_THRESHOLD) {
+
+  // IMPORTANT: the 57 user-confirmed blocks are deliberately routed through
+  // EXACTLY the same native building edge/glow pipeline as every other solid.
+  // No cloned/supplemental material and no alternate glow settings are used.
+  if (s.y >= FLAT_THRESHOLD || forceGlow) {
     solids.push(o);
     contentBox.union(b);
   } else {
     flats.push({ mesh:o, footprint:s.x * s.z });
   }
 });
+
+console.info(`[ADAM glow] native edge/glow targets resolved ${forcedGlowResolved.size}/${FORCE_GLOW_PATHS.size}`);
+const unresolvedForcedGlow = [...FORCE_GLOW_PATHS].filter(path => !forcedGlowResolved.has(path));
+if (unresolvedForcedGlow.length) console.warn('[ADAM glow] unresolved forced paths:', unresolvedForcedGlow);
 
 if (!solids.length) contentBox.setFromObject(model);
 flats.sort((a,b) => b.footprint - a.footprint);
@@ -145,9 +152,7 @@ rimLight.position.set(-.7, .35, -.6).multiplyScalar(radius);
 /* ----------------------------------------------------------- Spline motion */
 const motion = createSplineMotion(model, { debug:true, unitScale:1, ambient:true });
 
-/* ------------------------------------------------------- moving edge layers
-   Edge/glow objects live under each mesh in LOCAL space, so transforms inherited
-   from b1 / b2 / both b2a groups move the lines with the buildings. */
+/* ------------------------------------------------------- moving edge layers */
 const edgeMat = new LineMaterial({ linewidth:1, transparent:true, depthTest:true });
 const glowMat = new LineMaterial({
   linewidth:3, transparent:true, depthTest:true, depthWrite:false,
@@ -167,14 +172,11 @@ function clearEdgeLayers() {
 }
 
 function isB10Prism(mesh) {
-  // b10 is built from three overlapping extruded rectangles plus one thin cap.
-  // Spline presents the cap as one flat top; outlining each prism's upper rim
-  // creates the false tiled/grid top seen in Three.js.
   if (mesh.parent?.name !== 'b10') return false;
   mesh.geometry.computeBoundingBox();
   const bb = mesh.geometry.boundingBox;
   if (!bb) return false;
-  return (bb.max.z - bb.min.z) > 10; // prisms ~=239 local units; cap ~=1
+  return (bb.max.z - bb.min.z) > 10;
 }
 
 function edgeGeometryForMesh(mesh, angle) {
@@ -188,8 +190,6 @@ function edgeGeometryForMesh(mesh, angle) {
     const eps = Math.max(1e-4, (bb.max.z - bb.min.z) * 1e-4);
     const kept = [];
 
-    // EdgesGeometry stores segment endpoint pairs. Drop only segments whose
-    // two endpoints lie on the prism's upper face. Side/vertical edges remain.
     for (let i = 0; i < pos.count; i += 2) {
       const aTop = pos.getZ(i) >= topZ - eps;
       const bTop = pos.getZ(i + 1) >= topZ - eps;
@@ -290,7 +290,7 @@ const motionStatus = motion.unresolved.length
   : ` · motion ${motion.bound.length}/${motion.bound.length + motion.inert.length}`;
 const ambientStatus = motion.hasAmbient ? ` · ambient ${motion.spins.length}` : '';
 setStatus(
-  `solid ${solids.length} · flat ${flats.length} · slab "${slabMesh ? slabMesh.name : 'none'}"\n` +
+  `solid ${solids.length} · flat ${flats.length} · forced glow ${forcedGlowResolved.size}/${FORCE_GLOW_PATHS.size} · slab "${slabMesh ? slabMesh.name : 'none'}"\n` +
   `filtered ${size.x.toFixed(1)} x ${size.y.toFixed(1)} x ${size.z.toFixed(1)} · r ${radius.toFixed(2)}${motionStatus}${ambientStatus}`
 );
 
@@ -326,10 +326,6 @@ function applyStyle() {
   }
 
   if (slabMesh) {
-    // Treat the site plate as a visual backdrop rather than an occluding wall.
-    // Several source buildings intentionally extend a few millimetres below the
-    // nominal plate height; letting the plate write depth cuts their bases off
-    // unevenly and falsely reads as a tilted ground plane.
     slabMesh.renderOrder = -20;
     eachMaterial(slabMesh, mat => {
       if (mat.color) mat.color.set(s.slab);
@@ -589,7 +585,7 @@ function syncUI() {
   const spinning = motion.spins.map(s => s.key).join(', ');
   const inert = motion.inert.map(i => i.key).join(', ');
   setStatus(
-    `fuller model · ${solids.length} solid / ${flats.length} flat\n` +
+    `fuller model · ${solids.length} solid / ${flats.length} flat · forced glow ${forcedGlowResolved.size}/${FORCE_GLOW_PATHS.size}\n` +
     `Spline reveal mapped: ${mapped || 'none'}\n` +
     `ambient: ${spinning || 'none'}${inert ? ` · inert: ${inert}` : ''}\n` +
     `frames: ${state.keyframes.length} · selected ${String(active).padStart(2,'0')} · reveal ${(state.keyframes[active].motionProgress ?? 0).toFixed(3)}`
