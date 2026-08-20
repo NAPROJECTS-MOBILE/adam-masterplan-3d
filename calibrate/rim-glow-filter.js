@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { LineSegments2 } from 'three/addons/lines/LineSegments2.js';
 import { LineSegmentsGeometry } from 'three/addons/lines/LineSegmentsGeometry.js';
-import { FORCE_GLOW_PATHS } from './glow-targets.js';
+import { FORCE_GLOW_PATHS } from './glow-targets.js?v=67-20260820-1235';
 
 /*
   ADAM rim-glow policy
@@ -39,22 +39,10 @@ function pathOf(object) {
   return parts.reverse().join('/');
 }
 
-function isForced(path) {
-  return FORCE_GLOW_PATHS.has(path);
-}
-
-function isExcluded(path) {
-  return NO_RIM_GLOW_PATHS.has(path) && !isForced(path);
-}
-
-function isNativeOrSupplementalGlow(object) {
-  return object?.isLineSegments2 && object.material?.blending === THREE.AdditiveBlending;
-}
-
-function isSupplementalGlow(object) {
-  return !!object?.userData?.adamSupplementalRimGlow;
-}
-
+function isForced(path) { return FORCE_GLOW_PATHS.has(path); }
+function isExcluded(path) { return NO_RIM_GLOW_PATHS.has(path) && !isForced(path); }
+function isNativeOrSupplementalGlow(object) { return object?.isLineSegments2 && object.material?.blending === THREE.AdditiveBlending; }
+function isSupplementalGlow(object) { return !!object?.userData?.adamSupplementalRimGlow; }
 function isEligibleClusterMesh(object) {
   if (!object?.isMesh || object.isLineSegments2) return false;
   if (!object.geometry?.attributes?.position) return false;
@@ -65,15 +53,10 @@ function isEligibleClusterMesh(object) {
 function makeLineGeometry(mesh, thresholdAngle = 30) {
   const edges = new THREE.EdgesGeometry(mesh.geometry, thresholdAngle);
   const pos = edges.attributes.position;
-  if (!pos || pos.count < 2) {
-    edges.dispose();
-    return null;
-  }
-
+  if (!pos || pos.count < 2) { edges.dispose(); return null; }
   const arr = new Float32Array(pos.count * 3);
   arr.set(pos.array);
   edges.dispose();
-
   const geo = new LineSegmentsGeometry();
   geo.setPositions(arr);
   return geo;
@@ -82,7 +65,6 @@ function makeLineGeometry(mesh, thresholdAngle = 30) {
 function directNativeGlowChildren(mesh) {
   return mesh.children.filter(child => isNativeOrSupplementalGlow(child) && !isSupplementalGlow(child));
 }
-
 function findNativeGlowTemplate(scene) {
   let template = null;
   scene.traverse(object => {
@@ -94,8 +76,6 @@ function findNativeGlowTemplate(scene) {
   return template;
 }
 
-/* Existing app-created glow still needs the legacy blacklist enforced, except
-   for any target the user explicitly selected for glow. */
 const originalUpdateMatrixWorld = LineSegments2.prototype.updateMatrixWorld;
 LineSegments2.prototype.updateMatrixWorld = function updateMatrixWorld(force) {
   originalUpdateMatrixWorld.call(this, force);
@@ -117,7 +97,6 @@ function destroySupplemental() {
   }
   supplemental.clear();
 }
-
 function cloneTemplateMaterial(template) {
   const mat = template.material.clone();
   mat.blending = THREE.AdditiveBlending;
@@ -127,34 +106,26 @@ function cloneTemplateMaterial(template) {
   mat.toneMapped = false;
   return mat;
 }
-
 function addSupplementalGlow(mesh, template) {
   const geometry = makeLineGeometry(mesh, 30);
   if (!geometry) return 0;
-
   const makeOne = instanceMatrix => {
     const line = new LineSegments2(geometry.clone(), cloneTemplateMaterial(template));
     line.userData.adamSupplementalRimGlow = true;
     line.frustumCulled = false;
     line.renderOrder = template.renderOrder || 2;
-
     if (instanceMatrix) {
       line.matrixAutoUpdate = false;
       line.matrix.copy(instanceMatrix);
     }
-
     mesh.add(line);
     supplemental.add(line);
     return 1;
   };
-
   let made = 0;
   if (mesh.isInstancedMesh) {
     const matrix = new THREE.Matrix4();
-    for (let i = 0; i < mesh.count; i++) {
-      mesh.getMatrixAt(i, matrix);
-      made += makeOne(matrix.clone());
-    }
+    for (let i = 0; i < mesh.count; i++) { mesh.getMatrixAt(i, matrix); made += makeOne(matrix.clone()); }
     geometry.dispose();
   } else {
     const line = new LineSegments2(geometry, cloneTemplateMaterial(template));
@@ -165,66 +136,43 @@ function addSupplementalGlow(mesh, template) {
     supplemental.add(line);
     made = 1;
   }
-
   return made;
 }
-
 function copyGlowStyle(template, line) {
-  const src = template.material;
-  const dst = line.material;
-
+  const src = template.material, dst = line.material;
   if (src.color && dst.color) dst.color.copy(src.color);
   if ('opacity' in src) dst.opacity = src.opacity;
   if ('linewidth' in src) dst.linewidth = src.linewidth;
   if (src.resolution && dst.resolution) dst.resolution.copy(src.resolution);
-
   line.visible = template.visible;
 }
-
 function rebuildMissingGlow(scene, template) {
   destroySupplemental();
-  let added = 0;
-  let forcedResolved = 0;
-
+  let added = 0, forcedResolved = 0;
   scene.traverse(mesh => {
     if (!isEligibleClusterMesh(mesh)) return;
-
     const path = pathOf(mesh);
     if (isForced(path)) forcedResolved++;
-
     if (isExcluded(path)) {
       for (const glow of directNativeGlowChildren(mesh)) glow.visible = false;
       return;
     }
-
-    // Native app-v2 glow already exists for this mesh — do not double it.
     if (directNativeGlowChildren(mesh).length) return;
-
     added += addSupplementalGlow(mesh, template);
   });
-
   if (added !== lastAddedCount || forcedResolved !== lastForcedResolved) {
     lastAddedCount = added;
     lastForcedResolved = forcedResolved;
-    console.info(
-      `[ADAM rim glow] added ${added} supplemental glow layer(s); ` +
-      `forced targets resolved=${forcedResolved}/${FORCE_GLOW_PATHS.size}; ` +
-      `legacy blacklist=${NO_RIM_GLOW_PATHS.size}`
-    );
+    console.info(`[ADAM rim glow] added ${added} supplemental glow layer(s); forced targets resolved=${forcedResolved}/${FORCE_GLOW_PATHS.size}; legacy blacklist=${NO_RIM_GLOW_PATHS.size}`);
   }
 }
-
 function syncRimGlow(scene) {
   const template = findNativeGlowTemplate(scene);
   if (!template) return;
-
-  // app-v2 destroys/rebuilds native glow when Edge Angle changes. Detect the
-  // replacement template and rebuild supplemental geometry at the same time.
   if (template !== templateIdentity) {
     templateIdentity = template;
     rebuildMissingGlow(scene, template);
   }
-
   for (const line of supplemental) {
     if (!line.parent) continue;
     const path = pathOf(line.parent);
@@ -234,7 +182,6 @@ function syncRimGlow(scene) {
   }
 }
 
-/* Run after app-v2 has built its native glow, immediately before each draw. */
 const originalRender = THREE.WebGLRenderer.prototype.render;
 THREE.WebGLRenderer.prototype.render = function render(scene, camera) {
   syncRimGlow(scene);
