@@ -1,4 +1,4 @@
-// ADAM calibration motion wrapper — v5.5 + explicit floor clearance
+// ADAM calibration motion wrapper — v5.6 + explicit cluster-1 clearances
 //
 // v5.4 fixes an important timeline sampling bug in the pinned v5.3 core:
 // b2a's first authored key is at Spline t=1.50 with scaleY=0. Before that
@@ -6,13 +6,11 @@
 // instead returning the first key for every earlier time, which flattened the
 // b2a geometry into the base plane from t=1.00 through 1.50.
 //
-// v5.5 also lowers the user-identified cluster_1/floor mesh by exactly 2 local
-// units, using the same small visual-clearance convention as the earlier pad
-// corrections. The floor is static, so the offset is applied once from its
-// captured GLB base Y and re-applied absolutely on reset (never accumulated).
-//
-// We preserve the original local transform for both real b2a branches until
-// t=1.50, then hand control back to the authoritative Spline keyframes.
+// v5.5 lowers the user-identified cluster_1/floor mesh by exactly 2 local units.
+// v5.6 raises the user-identified cluster_1/b6/Boolean_9 and
+// cluster_1/b12/Rectangle_9_4 meshes by exactly 2 local units.
+// All static visual corrections are applied from captured GLB base Y values so
+// refresh/reset can never accumulate the offsets.
 
 export { MOTION_WINDOW, TRACKS, AMBIENT_DRIVERS } from 'https://cdn.jsdelivr.net/gh/NAPROJECTS-MOBILE/adam-masterplan-3d@8de5103d184ab80037f788834abe3d748cc50c99/calibrate/spline-motion.js';
 import { createSplineMotion as createCoreSplineMotion } from 'https://cdn.jsdelivr.net/gh/NAPROJECTS-MOBILE/adam-masterplan-3d@8de5103d184ab80037f788834abe3d748cc50c99/calibrate/spline-motion.js';
@@ -20,6 +18,7 @@ import { createSplineMotion as createCoreSplineMotion } from 'https://cdn.jsdeli
 const PAD_DOWN = -2;
 const BLOCK_UP = 2;
 const FLOOR_DOWN = -2;
+const STATIC_BLOCK_UP = 2;
 const MOTION_START = 1.0;
 const MOTION_END = 1.75;
 const B2A_FIRST_KEY = 1.5;
@@ -31,6 +30,11 @@ const PAD_PATHS = [
 ];
 
 const FLOOR_PATH = 'Scene_1/Main_Group/clusters/cluster_1/floor';
+
+const STATIC_UP_PATHS = [
+  'Scene_1/Main_Group/clusters/cluster_1/b6/Boolean_9',
+  'Scene_1/Main_Group/clusters/cluster_1/b12/Rectangle_9_4'
+];
 
 const B2A_PATHS = [
   'Scene_1/Main_Group/clusters/cluster_1/b2/b2a_1',
@@ -93,9 +97,13 @@ export function createSplineMotion(model, opts = {}) {
     return { path, node, base: captureLocal(node) };
   });
 
-  // Capture the static floor's authored GLB Y before applying any calibration.
+  // Capture static authored Y values before applying calibration offsets.
   const floor = findByPath(model, FLOOR_PATH);
   const floorBaseY = floor?.position.y ?? null;
+  const staticUp = STATIC_UP_PATHS.map(path => {
+    const node = findByPath(model, path);
+    return { path, node, baseY: node?.position.y ?? null };
+  });
 
   const motion = createCoreSplineMotion(model, opts);
 
@@ -127,12 +135,14 @@ export function createSplineMotion(model, opts = {}) {
   if (rectangle19) nudgeY(rectangle19, BLOCK_UP);
   else if (opts.debug) console.warn('[ADAM calibration] Rectangle_19_1 not found');
 
-  // User-requested cluster-1 floor correction: exactly 2 local units lower.
-  // Set from the captured authored Y so refresh/reset can never compound it.
-  const applyFloorOffset = () => {
+  // Static cluster-1 corrections are always set from their captured GLB Y.
+  const applyStaticOffsets = () => {
     if (floor && floorBaseY != null) setAbsoluteY(floor, floorBaseY + FLOOR_DOWN);
+    for (const { node, baseY } of staticUp) {
+      if (node && baseY != null) setAbsoluteY(node, baseY + STATIC_BLOCK_UP);
+    }
   };
-  applyFloorOffset();
+  applyStaticOffsets();
 
   // Boolean_12 is ambient-driven and the core rewrites its transform each RAF,
   // so its +2 must be reapplied after every authoritative Spline update.
@@ -151,17 +161,17 @@ export function createSplineMotion(model, opts = {}) {
     motion.reset = () => {
       coreReset();
       if (boolean12) nudgeY(boolean12, BLOCK_UP);
-      applyFloorOffset();
+      applyStaticOffsets();
       model.updateMatrixWorld(true);
     };
   }
 
   if (boolean12) nudgeY(boolean12, BLOCK_UP);
-  applyFloorOffset();
+  applyStaticOffsets();
   model.updateMatrixWorld(true);
 
   if (opts.debug) {
-    console.group('[ADAM calibration] v5.5 fixes');
+    console.group('[ADAM calibration] v5.6 fixes');
     console.log('b2a pre-key base preserved until Spline t=1.50:',
       b2aPreKey.map(x => ({ path: x.path, found: !!x.node })));
     console.log('pads Y', PAD_DOWN, PAD_PATHS);
@@ -169,6 +179,13 @@ export function createSplineMotion(model, opts = {}) {
     console.log('Boolean_12 Y', BLOCK_UP, '(after ambient each frame)');
     console.log('cluster_1/floor Y', FLOOR_DOWN,
       floor ? `(base ${floorBaseY} -> ${floorBaseY + FLOOR_DOWN})` : '(not found)');
+    console.log('cluster_1 static blocks Y', STATIC_BLOCK_UP,
+      staticUp.map(x => ({
+        path: x.path,
+        found: !!x.node,
+        baseY: x.baseY,
+        targetY: x.baseY == null ? null : x.baseY + STATIC_BLOCK_UP
+      })));
     console.groupEnd();
   }
 
