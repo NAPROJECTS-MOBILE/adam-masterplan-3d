@@ -49,7 +49,7 @@ THREE.Box3.prototype.getSize = function(target) {
 };
 
 try {
-  await import('./app-v2.js?v=cal-518-roof-native-glow-20260820-1242');
+  await import('./app-v2.js?v=scroll-timeline-20260820-1312');
 } finally {
   THREE.Box3.prototype.setFromObject = originalSetFromObject;
   THREE.Box3.prototype.getSize = originalGetSize;
