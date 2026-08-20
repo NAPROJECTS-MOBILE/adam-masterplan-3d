@@ -65,6 +65,14 @@ const glbPathOf = object => {
   return parts.reverse().join('/');
 };
 
+const FACE_ONLY_PATHS = new Set([
+  'Scene_1/Main_Group/clusters/cluster_2/Rectangle_2_5',
+  'Scene_1/Main_Group/clusters/cluster_2/Rectangle_10',
+  'Scene_1/Main_Group/clusters/cluster_2/Rectangle_3_2',
+  'Scene_1/Main_Group/clusters/cluster_1/floor',
+  'Scene_1/Main_Group/clusters/cluster_1/b10/Rectangle_9'
+]);
+
 /* ------------------------------------------------------- level site base */
 const mainGroup = model.getObjectByName('Main_Group');
 let primaryBaseMesh = null;
@@ -141,6 +149,12 @@ const slabMesh = primaryBaseMesh || flats[0]?.mesh || null;
 const pathMeshes = flats
   .map(f => f.mesh)
   .filter(m => m !== slabMesh && m.parent);
+const faceMeshes = [...new Set([
+  ...solids,
+  ...flats
+    .map(f => f.mesh)
+    .filter(mesh => FACE_ONLY_PATHS.has(glbPathOf(mesh)))
+])];
 
 const size = contentBox.getSize(new THREE.Vector3());
 const centre = contentBox.getCenter(new THREE.Vector3());
@@ -309,7 +323,7 @@ function applyStyle() {
 
   const tint = tmpColor.set(s.face);
   const faceLift = Math.max(0, s.faceLift ?? 0);
-  for (const m of solids) {
+  for (const m of faceMeshes) {
     const o = originals.get(m);
     eachMaterial(m, mat => {
       if (mat.color) mat.color.copy(o.color).lerp(tint, s.faceTint);
