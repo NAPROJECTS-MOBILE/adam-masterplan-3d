@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ADAM masterplan — calibration</title>
-<link rel="stylesheet" href="./calibrate/style.css">
+<link rel="stylesheet" href="./calibrate/style.css?v=scroll-timeline-20260820-1312">
 </head>
 <body>
 <div id="app">
@@ -13,13 +13,25 @@
   </div></div>
 
   <div id="panel">
+    <h2>Scroll timeline</h2>
+    <div class="scroll-timeline">
+      <div class="scroll-meta"><span>.h-scroll progress</span><strong id="scrollPctReadout">0%</strong></div>
+      <input id="scrollScrub" type="range" min="0" max="100" step="0.1" value="0">
+      <div class="scroll-scale"><span>0%</span><span>25%</span><span>50%</span><span>75%</span><span>100%</span></div>
+      <div class="row quarter-jumps" id="quarterJumps">
+        <button data-pct="0">0</button><button data-pct="25">25</button><button data-pct="50">50</button><button data-pct="75">75</button><button data-pct="100">100</button>
+      </div>
+      <p class="scroll-hint">Production mapping: 0% = .h-scroll starts, 25% = cluster 2, 50% = cluster 3, 75% = cluster 4; 75–100% holds cluster 4 unless you add another keyframe.</p>
+    </div>
+
     <h2>Keyframe</h2>
     <div class="row" id="kfrow"></div>
+    <div id="scrollKeyframeCtl"></div>
     <div class="row">
       <button id="addKFBtn">+ Add keyframe</button>
       <button id="deleteKFBtn">Delete keyframe</button>
     </div>
-    <div class="row"><button id="playBtn">▶ Play through</button><button id="copyPrevBtn">Copy previous</button></div>
+    <div class="row"><button id="playBtn">▶ Play 0–100%</button><button id="copyPrevBtn">Copy previous</button></div>
 
     <h2>Camera</h2><div id="camCtls"></div>
     <h2>Building motion</h2><div id="motionCtls"></div>
@@ -60,6 +72,6 @@
 }
 </script>
 <script type="module" src="./calibrate/rim-glow-filter.js?v=67-20260820-1242"></script>
-<script type="module" src="./calibrate/glow-bootstrap.js?v=67-20260820-1242"></script>
+<script type="module" src="./calibrate/glow-bootstrap.js?v=scroll-timeline-20260820-1312"></script>
 </body>
 </html>
