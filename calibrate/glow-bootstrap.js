@@ -53,7 +53,7 @@ THREE.Box3.prototype.getSize = function(target) {
 };
 
 try {
-  await import('./app-v2.js?v=cal-510-b2-duplicates-20260820-1056');
+  await import('./app-v2.js?v=cal-511-remove-b2-duplicates-20260820-1102');
 } finally {
   THREE.Box3.prototype.setFromObject = originalSetFromObject;
   THREE.Box3.prototype.getSize = originalGetSize;
