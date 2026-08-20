@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { FORCE_GLOW_PATHS } from './glow-targets.js?v=65-20260820-0157';
+import { FORCE_GLOW_PATHS } from './glow-targets.js?v=67-20260820-1235';
 
 /* ADAM explicit-glow bootstrap */
 const FORCE_MIN_Y = 0.100001;
@@ -35,7 +35,7 @@ THREE.Box3.prototype.getSize = function(target) {
 };
 
 try {
-  await import('./app-v2.js?v=cal-518-static-roof-bars-up15-20260820-1216');
+  await import('./app-v2.js?v=cal-518-static-roof-bars-up15-glow67-20260820-1235');
 } finally {
   THREE.Box3.prototype.setFromObject = originalSetFromObject;
   THREE.Box3.prototype.getSize = originalGetSize;
