@@ -49,7 +49,7 @@ THREE.Box3.prototype.getSize = function(target) {
 };
 
 try {
-  await import('./app-v2.js?v=global-style-live-20260820-1452');
+  await import('./app-v2.js?v=native-five-face-materials-20260820-1540');
 } finally {
   THREE.Box3.prototype.setFromObject = originalSetFromObject;
   THREE.Box3.prototype.getSize = originalGetSize;
