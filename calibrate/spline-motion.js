@@ -1,25 +1,38 @@
-// ADAM calibration motion wrapper — v5.16 / remove exact lower Rectangle_7 duplicate
+// ADAM calibration motion wrapper — v5.17 / static roof bars at final top pose
 //
-// The fuller GLB contains an exact co-located mesh twin of the accepted
-// Rectangle_7 under the same Group_4. GLTFLoader names that raw duplicate
-// `mesh_51_instance_1`. It is the copy that starts lower vertically and rises
-// with the b2/b2a hierarchy.
+// User-confirmed correction for the two inner-b2 roof bars:
+//   - Rectangle_6
+//   - mesh_50_instance_2
 //
-// Previous geometry/footprint heuristics were intentionally removed here.
-// v5.16 is surgical: physically remove ONLY the exact runtime path
-// `.../Group_4/mesh_51_instance_1`, then detach the accepted Rectangle_7 from
-// b2a before motion evaluation so the retained block stays visible and static.
-// Nothing is hidden, cloned, or disposed. The adjacent instance_2 / instance_3
-// blocks are left untouched.
+// These are not reveal animation elements. They should already be lying flat on
+// the roof, like the accepted Rectangle_14 example, and must never rise during
+// Play Through.
+//
+// The fuller GLB also contains mesh_50_instance_1 exactly co-located with
+// Rectangle_6. That is a redundant render copy, so it is PHYSICALLY REMOVED
+// (never hidden). Geometry/material resources are not disposed because the
+// retained bars share them.
+//
+// To recover the correct authored roof elevation without guessing a pixel/unit
+// offset, v5.17 lets the existing b2/b2a evaluator reach progress=1 once during
+// setup, then detaches the two accepted bars at that FINAL world pose. The rest
+// of the model is immediately returned to progress=0. From that point onward
+// the bars live under static cluster_1 and cannot inherit b2/b2a motion.
 
-const V512 = 'https://cdn.jsdelivr.net/gh/NAPROJECTS-MOBILE/adam-masterplan-3d@272e77fa24efc82aef2ddc3387df975758f8382e/calibrate/spline-motion.js';
+const V516 = 'https://cdn.jsdelivr.net/gh/NAPROJECTS-MOBILE/adam-masterplan-3d@b8a717f40618b1f6de27b08065014c1a463a8f8d/calibrate/spline-motion.js';
 
-export { MOTION_WINDOW, TRACKS, AMBIENT_DRIVERS } from 'https://cdn.jsdelivr.net/gh/NAPROJECTS-MOBILE/adam-masterplan-3d@272e77fa24efc82aef2ddc3387df975758f8382e/calibrate/spline-motion.js';
-import { createSplineMotion as createV512SplineMotion } from 'https://cdn.jsdelivr.net/gh/NAPROJECTS-MOBILE/adam-masterplan-3d@272e77fa24efc82aef2ddc3387df975758f8382e/calibrate/spline-motion.js';
+export { MOTION_WINDOW, TRACKS, AMBIENT_DRIVERS } from 'https://cdn.jsdelivr.net/gh/NAPROJECTS-MOBILE/adam-masterplan-3d@b8a717f40618b1f6de27b08065014c1a463a8f8d/calibrate/spline-motion.js';
+import { createSplineMotion as createV516SplineMotion } from 'https://cdn.jsdelivr.net/gh/NAPROJECTS-MOBILE/adam-masterplan-3d@b8a717f40618b1f6de27b08065014c1a463a8f8d/calibrate/spline-motion.js';
 
-const RECTANGLE_7_PATH = 'Scene_1/Main_Group/clusters/cluster_1/b2/b2_1/b2a/Group_4/Rectangle_7';
-const BAD_RECTANGLE_7_DUPLICATE_PATH = 'Scene_1/Main_Group/clusters/cluster_1/b2/b2_1/b2a/Group_4/mesh_51_instance_1';
 const CLUSTER_1_PATH = 'Scene_1/Main_Group/clusters/cluster_1';
+
+const STATIC_ROOF_PATHS = [
+  'Scene_1/Main_Group/clusters/cluster_1/b2/b2_1/b2a/Group_4/Rectangle_6',
+  'Scene_1/Main_Group/clusters/cluster_1/b2/b2_1/b2a/Group_4/mesh_50_instance_2'
+];
+
+const BAD_ROOF_DUPLICATE_PATH =
+  'Scene_1/Main_Group/clusters/cluster_1/b2/b2_1/b2a/Group_4/mesh_50_instance_1';
 
 function pathOf(object) {
   const parts = [];
@@ -43,10 +56,10 @@ function forceVisible(node) {
   node.traverse(child => { child.visible = true; });
 }
 
-function attachToCluster(node, cluster, model) {
-  if (!node || !cluster) return false;
+function attachPreservingWorld(node, parent, model) {
+  if (!node || !parent) return false;
   model.updateMatrixWorld(true);
-  if (node.parent !== cluster) cluster.attach(node);
+  if (node.parent !== parent) parent.attach(node);
   forceVisible(node);
   node.updateMatrix();
   node.matrixWorldNeedsUpdate = true;
@@ -54,49 +67,93 @@ function attachToCluster(node, cluster, model) {
   return true;
 }
 
-export function createSplineMotion(model, opts = {}) {
-  // Resolve both exact GLB paths BEFORE any motion or re-parenting changes them.
-  const rectangle7 = findByPath(model, RECTANGLE_7_PATH);
-  const duplicate = findByPath(model, BAD_RECTANGLE_7_DUPLICATE_PATH);
-  const cluster1 = findByPath(model, CLUSTER_1_PATH);
+function captureLocal(node) {
+  return node ? {
+    position: node.position.clone(),
+    quaternion: node.quaternion.clone(),
+    scale: node.scale.clone()
+  } : null;
+}
 
-  let removedDuplicatePath = null;
+function restoreLocal(node, pose) {
+  if (!node || !pose) return;
+  node.position.copy(pose.position);
+  node.quaternion.copy(pose.quaternion);
+  node.scale.copy(pose.scale);
+  forceVisible(node);
+  node.updateMatrix();
+  node.matrixWorldNeedsUpdate = true;
+}
+
+export function createSplineMotion(model, opts = {}) {
+  // Resolve exact GLB paths while they still exist in their authored hierarchy.
+  const cluster1 = findByPath(model, CLUSTER_1_PATH);
+  const roofTargets = STATIC_ROOF_PATHS.map(path => ({
+    path,
+    node: findByPath(model, path)
+  }));
+  const duplicate = findByPath(model, BAD_ROOF_DUPLICATE_PATH);
+
+  // Remove the exact redundant mesh_50 copy. Do not hide and do not dispose its
+  // shared geometry/material resources.
+  let removedDuplicate = null;
   if (duplicate?.parent) {
-    removedDuplicatePath = pathOf(duplicate);
+    removedDuplicate = pathOf(duplicate);
     duplicate.parent.remove(duplicate);
-    // Deliberately do NOT dispose geometry/material resources: the accepted
-    // Rectangle_7 and neighbouring instances may share them.
   }
 
-  // Preserve the accepted Rectangle_7 exactly where it is in world space, but
-  // remove it from b2a inheritance before the evaluator can make it rise/collapse.
-  const heldBeforeMotion = attachToCluster(rectangle7, cluster1, model);
+  // Run the accepted v5.16 chain first. This preserves all previous calibration
+  // fixes, including the Rectangle_7 duplicate cleanup and static hold.
+  const motion = createV516SplineMotion(model, opts);
 
-  // Run the established accepted calibration/motion chain for everything else.
-  const motion = createV512SplineMotion(model, opts);
+  // The two roof bars currently inherit the b2/b2a rise. Let that hierarchy
+  // reach its intended END pose once, then freeze the actual bars there.
+  if (motion.setProgress) motion.setProgress(1);
+  model.updateMatrixWorld(true);
 
-  // Reassert the acceptance rule after setup and reset.
-  attachToCluster(rectangle7, cluster1, model);
+  const heldRoof = [];
+  for (const target of roofTargets) {
+    if (!target.node) {
+      if (opts.debug) console.warn('[ADAM calibration] roof target not found:', target.path);
+      continue;
+    }
+    if (attachPreservingWorld(target.node, cluster1, model)) heldRoof.push(target.path);
+  }
 
+  // Capture the static final roof poses after detaching them from b2/b2a.
+  const roofFinalPoses = roofTargets.map(target => ({
+    ...target,
+    pose: captureLocal(target.node)
+  }));
+
+  // Return the rest of the model to the entry state. The detached roof bars do
+  // not move because they are no longer children of the animated hierarchy.
+  if (motion.setProgress) motion.setProgress(0);
+  for (const target of roofFinalPoses) restoreLocal(target.node, target.pose);
+  model.updateMatrixWorld(true);
+
+  // Reset must preserve the accepted static roof pose as well.
   const baseReset = motion.reset?.bind(motion);
   if (baseReset) {
     motion.reset = () => {
       baseReset();
-      attachToCluster(rectangle7, cluster1, model);
+      for (const target of roofFinalPoses) {
+        attachPreservingWorld(target.node, cluster1, model);
+        restoreLocal(target.node, target.pose);
+      }
+      model.updateMatrixWorld(true);
     };
   }
 
-  motion.rectangle7HeldStatic = heldBeforeMotion;
-  motion.removedRectangle7Duplicate = removedDuplicatePath;
-  motion.rectangle7DuplicateExpectedPath = BAD_RECTANGLE_7_DUPLICATE_PATH;
+  motion.staticRoofBars = heldRoof;
+  motion.removedRoofDuplicate = removedDuplicate;
 
   if (opts.debug) {
-    console.group('[ADAM calibration] v5.16 exact Rectangle_7 cleanup');
-    console.log('accepted Rectangle_7 found:', !!rectangle7);
-    console.log('exact lower duplicate found:', !!duplicate);
-    console.log('physically removed duplicate:', removedDuplicatePath || '(not found)');
-    console.log('accepted Rectangle_7 held outside b2a:', heldBeforeMotion);
-    console.log('accepted runtime parent:', rectangle7?.parent?.name || '(none)');
+    console.group('[ADAM calibration] v5.17 static roof bars');
+    console.log('base motion source:', V516);
+    console.log('physically removed duplicate:', removedDuplicate || '(not found)');
+    console.log('held permanently at final roof pose:', heldRoof);
+    console.log('missing roof targets:', roofTargets.filter(x => !x.node).map(x => x.path));
     console.groupEnd();
   }
 
