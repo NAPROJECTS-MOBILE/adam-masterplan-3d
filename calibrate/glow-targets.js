@@ -1,8 +1,8 @@
 // Exact user-confirmed architecture that must receive the same native
 // pale-lime edge + additive glow treatment as the rest of the buildings.
-// 62 explicit GLB paths, grouped by cluster.
+// 65 explicit GLB paths, grouped by cluster.
 export const FORCE_GLOW_PATHS = new Set([
-  // cluster 1 — 24
+  // cluster 1 — 27
   'Scene_1/Main_Group/clusters/cluster_1/building_2/Rectangle_3_1',
   'Scene_1/Main_Group/clusters/cluster_1/building_12/Rectangle_10_4',
   'Scene_1/Main_Group/clusters/cluster_1/building_18/Rectangle_8',
@@ -11,6 +11,9 @@ export const FORCE_GLOW_PATHS = new Set([
   'Scene_1/Main_Group/clusters/cluster_1/b12/Rectangle_32',
   'Scene_1/Main_Group/clusters/cluster_1/b12/Rectangle_33',
   'Scene_1/Main_Group/clusters/cluster_1/b12/Rectangle_34',
+  'Scene_1/Main_Group/clusters/cluster_1/b2/b2_1/b2a/Group_4/Rectangle_7',
+  'Scene_1/Main_Group/clusters/cluster_1/b2/b2_1/b2a/Group_4/mesh_51_instance_2',
+  'Scene_1/Main_Group/clusters/cluster_1/b2/b2_1/b2a/Group_4/mesh_51_instance_3',
   'Scene_1/Main_Group/clusters/cluster_1/b5/b5a/Rectangle_36',
   'Scene_1/Main_Group/clusters/cluster_1/b5/b5a/Rectangle_36_1',
   'Scene_1/Main_Group/clusters/cluster_1/b5/b5a/Rectangle_38',
