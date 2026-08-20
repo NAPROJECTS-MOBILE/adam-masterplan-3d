@@ -49,7 +49,7 @@ THREE.Box3.prototype.getSize = function(target) {
 };
 
 try {
-  await import('./app-v2.js?v=scroll-timeline-20260820-1312');
+  await import('./app-v2.js?v=keyframe-direct-edit-20260820-1343');
 } finally {
   THREE.Box3.prototype.setFromObject = originalSetFromObject;
   THREE.Box3.prototype.getSize = originalGetSize;
