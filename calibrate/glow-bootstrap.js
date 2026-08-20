@@ -53,7 +53,7 @@ THREE.Box3.prototype.getSize = function(target) {
 };
 
 try {
-  await import('./app-v2.js?v=cal-58-20260820-1025');
+  await import('./app-v2.js?v=cal-59-static-inner-b2-20260820-1036');
 } finally {
   THREE.Box3.prototype.setFromObject = originalSetFromObject;
   THREE.Box3.prototype.getSize = originalGetSize;
