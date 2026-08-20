@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { FORCE_GLOW_PATHS } from './glow-targets.js';
+import { FORCE_GLOW_PATHS } from './glow-targets.js?v=65-20260820-0157';
 
 /*
   ADAM explicit-glow bootstrap
@@ -14,6 +14,10 @@ import { FORCE_GLOW_PATHS } from './glow-targets.js';
   During app-v2's initial Box3 classification pass, a whitelisted mesh reports
   a synthetic Y size just above FLAT_THRESHOLD. app-v2 therefore builds the
   exact SAME edgeMat + glowMat pair on it as every other building.
+
+  The query strings deliberately bust GitHub Pages/browser module caches. This
+  matters when new targets are appended to glow-targets.js without otherwise
+  changing app-v2.js: the browser must not reuse the previous target module.
 
   Once app-v2 has finished booting, Box3 is restored immediately.
 */
@@ -51,7 +55,7 @@ THREE.Box3.prototype.getSize = function(target) {
 };
 
 try {
-  await import('./app-v2.js');
+  await import('./app-v2.js?v=65-20260820-0157');
 } finally {
   THREE.Box3.prototype.setFromObject = originalSetFromObject;
   THREE.Box3.prototype.getSize = originalGetSize;
