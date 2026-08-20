@@ -1,4 +1,4 @@
-// ADAM calibration motion wrapper — v5.6 + explicit cluster-1 clearances
+// ADAM calibration motion wrapper — v5.7 + single cluster-1 clearance
 //
 // v5.4 fixes an important timeline sampling bug in the pinned v5.3 core:
 // b2a's first authored key is at Spline t=1.50 with scaleY=0. Before that
@@ -7,8 +7,8 @@
 // b2a geometry into the base plane from t=1.00 through 1.50.
 //
 // v5.5 lowers the user-identified cluster_1/floor mesh by exactly 2 local units.
-// v5.6 raises the user-identified cluster_1/b6/Boolean_9 and
-// cluster_1/b12/Rectangle_9_4 meshes by exactly 2 local units.
+// v5.7 raises ONLY cluster_1/b6/Boolean_9 by exactly 2 local units.
+// Rectangle_9_4 is intentionally left at its authored GLB position.
 // All static visual corrections are applied from captured GLB base Y values so
 // refresh/reset can never accumulate the offsets.
 
@@ -18,7 +18,7 @@ import { createSplineMotion as createCoreSplineMotion } from 'https://cdn.jsdeli
 const PAD_DOWN = -2;
 const BLOCK_UP = 2;
 const FLOOR_DOWN = -2;
-const STATIC_BLOCK_UP = 2;
+const BOOLEAN_9_UP = 2;
 const MOTION_START = 1.0;
 const MOTION_END = 1.75;
 const B2A_FIRST_KEY = 1.5;
@@ -30,11 +30,7 @@ const PAD_PATHS = [
 ];
 
 const FLOOR_PATH = 'Scene_1/Main_Group/clusters/cluster_1/floor';
-
-const STATIC_UP_PATHS = [
-  'Scene_1/Main_Group/clusters/cluster_1/b6/Boolean_9',
-  'Scene_1/Main_Group/clusters/cluster_1/b12/Rectangle_9_4'
-];
+const BOOLEAN_9_PATH = 'Scene_1/Main_Group/clusters/cluster_1/b6/Boolean_9';
 
 const B2A_PATHS = [
   'Scene_1/Main_Group/clusters/cluster_1/b2/b2a_1',
@@ -100,10 +96,8 @@ export function createSplineMotion(model, opts = {}) {
   // Capture static authored Y values before applying calibration offsets.
   const floor = findByPath(model, FLOOR_PATH);
   const floorBaseY = floor?.position.y ?? null;
-  const staticUp = STATIC_UP_PATHS.map(path => {
-    const node = findByPath(model, path);
-    return { path, node, baseY: node?.position.y ?? null };
-  });
+  const boolean9 = findByPath(model, BOOLEAN_9_PATH);
+  const boolean9BaseY = boolean9?.position.y ?? null;
 
   const motion = createCoreSplineMotion(model, opts);
 
@@ -136,11 +130,10 @@ export function createSplineMotion(model, opts = {}) {
   else if (opts.debug) console.warn('[ADAM calibration] Rectangle_19_1 not found');
 
   // Static cluster-1 corrections are always set from their captured GLB Y.
+  // Only Boolean_9 is raised. Rectangle_9_4 receives no offset.
   const applyStaticOffsets = () => {
     if (floor && floorBaseY != null) setAbsoluteY(floor, floorBaseY + FLOOR_DOWN);
-    for (const { node, baseY } of staticUp) {
-      if (node && baseY != null) setAbsoluteY(node, baseY + STATIC_BLOCK_UP);
-    }
+    if (boolean9 && boolean9BaseY != null) setAbsoluteY(boolean9, boolean9BaseY + BOOLEAN_9_UP);
   };
   applyStaticOffsets();
 
@@ -171,7 +164,7 @@ export function createSplineMotion(model, opts = {}) {
   model.updateMatrixWorld(true);
 
   if (opts.debug) {
-    console.group('[ADAM calibration] v5.6 fixes');
+    console.group('[ADAM calibration] v5.7 fixes');
     console.log('b2a pre-key base preserved until Spline t=1.50:',
       b2aPreKey.map(x => ({ path: x.path, found: !!x.node })));
     console.log('pads Y', PAD_DOWN, PAD_PATHS);
@@ -179,13 +172,9 @@ export function createSplineMotion(model, opts = {}) {
     console.log('Boolean_12 Y', BLOCK_UP, '(after ambient each frame)');
     console.log('cluster_1/floor Y', FLOOR_DOWN,
       floor ? `(base ${floorBaseY} -> ${floorBaseY + FLOOR_DOWN})` : '(not found)');
-    console.log('cluster_1 static blocks Y', STATIC_BLOCK_UP,
-      staticUp.map(x => ({
-        path: x.path,
-        found: !!x.node,
-        baseY: x.baseY,
-        targetY: x.baseY == null ? null : x.baseY + STATIC_BLOCK_UP
-      })));
+    console.log('cluster_1/b6/Boolean_9 Y', BOOLEAN_9_UP,
+      boolean9 ? `(base ${boolean9BaseY} -> ${boolean9BaseY + BOOLEAN_9_UP})` : '(not found)');
+    console.log('cluster_1/b12/Rectangle_9_4 Y 0 (authored position preserved)');
     console.groupEnd();
   }
 
