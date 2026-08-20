@@ -1,26 +1,8 @@
 import * as THREE from 'three';
 import { FORCE_GLOW_PATHS } from './glow-targets.js?v=65-20260820-0157';
 
-/*
-  ADAM explicit-glow bootstrap
-  ----------------------------
-  app-v2 creates the correct two-part architectural treatment (inner pale-lime
-  edge + wider additive glow) only for meshes it classifies as `solids`.
-  That classifier normally uses world-space Y height, so thin/rotated building
-  pieces can fall into the `flats` bucket and never get the native edge/glow pair.
-
-  This bootstrap runs BEFORE app-v2 and changes classification only for the
-  exact whitelisted GLB paths. Geometry and real transforms are untouched.
-  During app-v2's initial Box3 classification pass, a whitelisted mesh reports
-  a synthetic Y size just above FLAT_THRESHOLD. app-v2 therefore builds the
-  exact SAME edgeMat + glowMat pair on it as every other building.
-
-  The query strings deliberately bust GitHub Pages/browser module caches.
-
-  Once app-v2 has finished booting, Box3 is restored immediately.
-*/
-
-const FORCE_MIN_Y = 0.100001; // config FLAT_THRESHOLD is 0.1
+/* ADAM explicit-glow bootstrap */
+const FORCE_MIN_Y = 0.100001;
 const FORCE_TAG = Symbol('adam-force-native-glow');
 const matched = new Set();
 
@@ -53,7 +35,7 @@ THREE.Box3.prototype.getSize = function(target) {
 };
 
 try {
-  await import('./app-v2.js?v=cal-512-restore-rectangle7-20260820-1107');
+  await import('./app-v2.js?v=cal-513-rectangle7-hold-20260820-1118');
 } finally {
   THREE.Box3.prototype.setFromObject = originalSetFromObject;
   THREE.Box3.prototype.getSize = originalGetSize;
@@ -64,7 +46,5 @@ try {
   );
 
   const missing = [...FORCE_GLOW_PATHS].filter(path => !matched.has(path));
-  if (missing.length) {
-    console.warn('[ADAM native glow] whitelist paths not encountered before motion re-parenting:', missing);
-  }
+  if (missing.length) console.warn('[ADAM native glow] unresolved forced paths:', missing);
 }
