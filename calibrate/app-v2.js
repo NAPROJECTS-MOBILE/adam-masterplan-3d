@@ -11,13 +11,22 @@ import { FORCE_GLOW_PATHS } from './glow-targets.js';
 const $ = id => document.getElementById(id);
 const setStatus = s => $('status').textContent = s;
 
-const seededMotion = [0, 0.027, 0.667, 1, 1];
+// Four cluster anchors on the Webflow .h-scroll scale.
+// 0–25, 25–50 and 50–75 interpolate; 75–100 holds cluster 4 unless another
+// keyframe is inserted. Camera values start identical so the user can calibrate
+// each cluster pose explicitly.
+const seededFrames = [
+  { scrollPct:0,  motionProgress:0 },
+  { scrollPct:25, motionProgress:0.027 },
+  { scrollPct:50, motionProgress:0.667 },
+  { scrollPct:75, motionProgress:1 }
+];
 const state = {
-  keyframes: seededMotion.map(motionProgress => ({ ...START_POSE, motionProgress })),
+  keyframes: seededFrames.map(k => ({ ...START_POSE, ...k })),
   style: { ...PRESETS['Official Light'] },
   preset: 'Official Light'
 };
-let active = 0, playing = false, playT = 0, animateDots = true;
+let active = 0, playing = false, playT = 0, previewScrollPct = 0, animateDots = true;
 
 const root = document.querySelector('[data-scene3d]');
 const canvas = root.querySelector('[data-scene3d-canvas]');
@@ -114,9 +123,6 @@ model.traverse(o => {
   const b = new THREE.Box3().setFromObject(o);
   const s = b.getSize(new THREE.Vector3());
 
-  // IMPORTANT: the 57 user-confirmed blocks are deliberately routed through
-  // EXACTLY the same native building edge/glow pipeline as every other solid.
-  // No cloned/supplemental material and no alternate glow settings are used.
   if (s.y >= FLAT_THRESHOLD || forceGlow) {
     solids.push(o);
     contentBox.union(b);
@@ -285,15 +291,6 @@ const grid = new THREE.GridHelper(radius * 4, 24, 0x444444, 0x262626);
 grid.visible = false;
 scene.add(boundsHelper, grid);
 
-const motionStatus = motion.unresolved.length
-  ? ` · motion unresolved ${motion.unresolved.length}`
-  : ` · motion ${motion.bound.length}/${motion.bound.length + motion.inert.length}`;
-const ambientStatus = motion.hasAmbient ? ` · ambient ${motion.spins.length}` : '';
-setStatus(
-  `solid ${solids.length} · flat ${flats.length} · forced glow ${forcedGlowResolved.size}/${FORCE_GLOW_PATHS.size} · slab "${slabMesh ? slabMesh.name : 'none'}"\n` +
-  `filtered ${size.x.toFixed(1)} x ${size.y.toFixed(1)} x ${size.z.toFixed(1)} · r ${radius.toFixed(2)}${motionStatus}${ambientStatus}`
-);
-
 /* ------------------------------------------------------------- appearance */
 const tmpColor = new THREE.Color();
 function eachMaterial(mesh, fn) {
@@ -388,6 +385,7 @@ resize();
 
 const look = new THREE.Vector3();
 const lerp = (a,b,t) => a + (b-a) * t;
+const clamp = (v,a,b) => Math.max(a, Math.min(b, v));
 const camEase = t => t < .5 ? 4*t*t*t : 1 - Math.pow(-2*t+2,3)/2;
 
 function poseAt(k) {
@@ -403,18 +401,29 @@ function poseAt(k) {
   camera.lookAt(look);
 }
 
-function applyTimeline(t) {
+function applyScrollTimeline(scrollPct) {
   const K = state.keyframes;
-  if (K.length === 1) {
+  const pct = clamp(scrollPct, 0, 100);
+  if (!K.length) return;
+  if (K.length === 1 || pct <= K[0].scrollPct) {
     poseAt(K[0]);
     motion.setProgress(K[0].motionProgress ?? 0);
     return;
   }
-  const seg = t * (K.length - 1);
-  const i = Math.min(K.length - 2, Math.floor(seg));
-  const raw = Math.max(0, Math.min(1, seg - i));
+
+  const last = K[K.length - 1];
+  if (pct >= last.scrollPct) {
+    poseAt(last);
+    motion.setProgress(last.motionProgress ?? 0);
+    return;
+  }
+
+  let i = 0;
+  while (i < K.length - 1 && pct > K[i + 1].scrollPct) i++;
+  const a = K[i], b = K[i + 1];
+  const span = Math.max(0.0001, b.scrollPct - a.scrollPct);
+  const raw = clamp((pct - a.scrollPct) / span, 0, 1);
   const f = camEase(raw);
-  const a = K[i], b = K[i+1];
 
   poseAt({
     azimuth:lerp(a.azimuth,b.azimuth,f),
@@ -423,7 +432,6 @@ function applyTimeline(t) {
     panX:lerp(a.panX,b.panX,f),
     panZ:lerp(a.panZ,b.panZ,f)
   });
-
   motion.setProgress(lerp(a.motionProgress ?? 0, b.motionProgress ?? 0, raw));
 }
 
@@ -462,11 +470,12 @@ const getKF = () => state.keyframes[active];
 const getStyle = () => state.style;
 const onStyle = () => applyStyle();
 const onEdge = () => { rebuildEdges(state.style.edgeAngle); applyStyle(); };
+const onKeyframeEdit = () => { previewScrollPct = getKF().scrollPct; playing = false; };
 const MOTION = [['motionProgress','Spline reveal progress',0,1,.001]];
 
 const hosts = [
-  [$('camCtls'), CAM, getKF, () => {}],
-  [$('motionCtls'), MOTION, getKF, () => {}],
+  [$('camCtls'), CAM, getKF, onKeyframeEdit],
+  [$('motionCtls'), MOTION, getKF, onKeyframeEdit],
   [$('lightCtls'), LIGHT, getStyle, onStyle],
   [$('faceCtls'), FACE, getStyle, onStyle],
   [$('slabCtls'), SLAB, getStyle, onStyle],
@@ -477,20 +486,57 @@ const hosts = [
 hosts.forEach(([h,s,g,c]) => build(h,s,g,c));
 
 const kfrow = $('kfrow');
+const scrollKFHost = $('scrollKeyframeCtl');
+const scrollKFWrap = document.createElement('div');
+scrollKFWrap.className = 'ctl';
+scrollKFWrap.innerHTML = '<label>Keyframe scroll position<span data-v></span></label>';
+const scrollKFInput = document.createElement('input');
+Object.assign(scrollKFInput, { type:'range', min:0, max:100, step:.1 });
+scrollKFWrap.appendChild(scrollKFInput);
+scrollKFHost.appendChild(scrollKFWrap);
+
+function clampKeyframePct(index, value) {
+  const prev = index > 0 ? state.keyframes[index - 1].scrollPct + 0.1 : 0;
+  const next = index < state.keyframes.length - 1 ? state.keyframes[index + 1].scrollPct - 0.1 : 100;
+  return clamp(value, prev, next);
+}
+
+scrollKFInput.oninput = () => {
+  const next = clampKeyframePct(active, parseFloat(scrollKFInput.value));
+  state.keyframes[active].scrollPct = next;
+  previewScrollPct = next;
+  playing = false;
+  renderKeyframeButtons();
+  syncUI();
+};
+
 function renderKeyframeButtons() {
   kfrow.innerHTML = '';
-  state.keyframes.forEach((_,i) => {
+  state.keyframes.forEach((k,i) => {
     const b = document.createElement('button');
-    b.textContent = String(i).padStart(2,'0');
-    b.onclick = () => { active = i; playing = false; syncUI(); };
+    b.textContent = `${String(i + 1).padStart(2,'0')} · ${Number(k.scrollPct.toFixed(1))}%`;
+    b.onclick = () => {
+      active = i;
+      playing = false;
+      previewScrollPct = k.scrollPct;
+      syncUI();
+    };
     kfrow.appendChild(b);
   });
 }
 
 $('addKFBtn').onclick = () => {
   const source = { ...state.keyframes[active] };
+  const next = state.keyframes[active + 1];
+  let pct;
+  if (next) pct = (source.scrollPct + next.scrollPct) / 2;
+  else if (source.scrollPct < 100) pct = (source.scrollPct + 100) / 2;
+  else pct = Math.max(0, source.scrollPct - 1);
+
+  source.scrollPct = Number(pct.toFixed(1));
   state.keyframes.splice(active + 1, 0, source);
   active += 1;
+  previewScrollPct = source.scrollPct;
   playing = false;
   renderKeyframeButtons();
   syncUI();
@@ -500,6 +546,7 @@ $('deleteKFBtn').onclick = () => {
   if (state.keyframes.length <= 2) return;
   state.keyframes.splice(active, 1);
   active = Math.max(0, Math.min(active, state.keyframes.length - 1));
+  previewScrollPct = state.keyframes[active].scrollPct;
   playing = false;
   renderKeyframeButtons();
   syncUI();
@@ -507,12 +554,37 @@ $('deleteKFBtn').onclick = () => {
 
 $('copyPrevBtn').onclick = () => {
   if (active > 0) {
-    state.keyframes[active] = { ...state.keyframes[active - 1] };
+    const pct = state.keyframes[active].scrollPct;
+    state.keyframes[active] = { ...state.keyframes[active - 1], scrollPct:pct };
+    previewScrollPct = pct;
     syncUI();
   }
 };
 
-$('playBtn').onclick = () => { playing = !playing; playT = 0; syncUI(); };
+$('playBtn').onclick = () => {
+  if (playing) {
+    playing = false;
+  } else {
+    playing = true;
+    playT = 0;
+    previewScrollPct = 0;
+  }
+  syncUI();
+};
+
+$('scrollScrub').oninput = e => {
+  playing = false;
+  previewScrollPct = parseFloat(e.target.value);
+  syncUI();
+};
+
+for (const b of $('quarterJumps').querySelectorAll('[data-pct]')) {
+  b.onclick = () => {
+    playing = false;
+    previewScrollPct = parseFloat(b.dataset.pct);
+    syncUI();
+  };
+}
 
 Object.keys(PRESETS).forEach(name => {
   const b = document.createElement('button');
@@ -544,12 +616,12 @@ toggle('tAnimate', v => { animateDots = v; dotUniforms.uAnimate.value = v ? 1 : 
 
 function serialise() {
   const K = state.keyframes.map((k,i) =>
-    `  // ${String(i).padStart(2,'0')}\n` +
-    `  { azimuth: ${k.azimuth.toFixed(0)}, elevation: ${k.elevation.toFixed(0)}, ` +
+    `  // ${String(i + 1).padStart(2,'0')} @ ${Number(k.scrollPct.toFixed(1))}% of .h-scroll\n` +
+    `  { scrollPct: ${Number(k.scrollPct.toFixed(1))}, azimuth: ${k.azimuth.toFixed(0)}, elevation: ${k.elevation.toFixed(0)}, ` +
     `zoom: ${k.zoom.toFixed(2)}, panX: ${k.panX.toFixed(2)}, panZ: ${k.panZ.toFixed(2)}, ` +
     `motionProgress: ${(k.motionProgress ?? 0).toFixed(3)} }`
   ).join(',\n');
-  return `const KEYFRAMES = [\n${K}\n];\n\nstyle = ${JSON.stringify(state.style,null,2)};`;
+  return `const KEYFRAMES = [\n${K}\n];\n\n// Production: feed 0–100% .h-scroll progress into applyScrollTimeline().\nstyle = ${JSON.stringify(state.style,null,2)};`;
 }
 
 $('copyBtn').onclick = async () => {
@@ -580,15 +652,24 @@ function syncUI() {
     }
   }
 
+  scrollKFInput.value = state.keyframes[active].scrollPct;
+  scrollKFWrap.querySelector('[data-v]').textContent = `${Number(state.keyframes[active].scrollPct.toFixed(1))}%`;
+  $('scrollScrub').value = previewScrollPct;
+  $('scrollPctReadout').textContent = `${Number(previewScrollPct.toFixed(1))}%`;
+  $('playBtn').textContent = playing ? '❚❚ Pause' : '▶ Play 0–100%';
+  for (const b of $('quarterJumps').querySelectorAll('[data-pct]')) {
+    b.classList.toggle('on', Math.abs(parseFloat(b.dataset.pct) - previewScrollPct) < 0.05);
+  }
+
   $('out').value = serialise();
   const mapped = motion.bound.map(b => b.key).join(', ');
   const spinning = motion.spins.map(s => s.key).join(', ');
   const inert = motion.inert.map(i => i.key).join(', ');
   setStatus(
     `fuller model · ${solids.length} solid / ${flats.length} flat · forced glow ${forcedGlowResolved.size}/${FORCE_GLOW_PATHS.size}\n` +
+    `scroll preview ${Number(previewScrollPct.toFixed(1))}% · keyframes ${state.keyframes.map(k => Number(k.scrollPct.toFixed(1)) + '%').join(' / ')}\n` +
     `Spline reveal mapped: ${mapped || 'none'}\n` +
-    `ambient: ${spinning || 'none'}${inert ? ` · inert: ${inert}` : ''}\n` +
-    `frames: ${state.keyframes.length} · selected ${String(active).padStart(2,'0')} · reveal ${(state.keyframes[active].motionProgress ?? 0).toFixed(3)}`
+    `ambient: ${spinning || 'none'}${inert ? ` · inert: ${inert}` : ''}`
   );
 }
 
@@ -609,11 +690,20 @@ let lastDot = 0;
   }
 
   if (playing) {
-    playT = (playT + .0022) % 1;
-    applyTimeline(playT);
+    playT += .0022;
+    if (playT >= 1) {
+      playT = 1;
+      playing = false;
+    }
+    previewScrollPct = playT * 100;
+    applyScrollTimeline(previewScrollPct);
+    if (!playing) syncUI();
+    else {
+      $('scrollScrub').value = previewScrollPct;
+      $('scrollPctReadout').textContent = `${Math.round(previewScrollPct)}%`;
+    }
   } else {
-    poseAt(state.keyframes[active]);
-    motion.setProgress(state.keyframes[active].motionProgress ?? 0);
+    applyScrollTimeline(previewScrollPct);
   }
 
   renderer.render(scene, camera);
