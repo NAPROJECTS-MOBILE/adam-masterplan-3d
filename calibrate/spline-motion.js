@@ -1,23 +1,17 @@
-// ADAM calibration motion wrapper — v5.17 / static roof bars at final top pose
+// ADAM calibration motion wrapper — v5.18 / static roof bars +15 Y
 //
 // User-confirmed correction for the two inner-b2 roof bars:
 //   - Rectangle_6
 //   - mesh_50_instance_2
 //
-// These are not reveal animation elements. They should already be lying flat on
-// the roof, like the accepted Rectangle_14 example, and must never rise during
-// Play Through.
+// They remain permanently static at the accepted final/top roof pose from v5.17,
+// but are now raised a further +15 local Y units after being detached to
+// cluster_1. This offset is captured into their static pose, so Play Through and
+// Reset cannot make it accumulate or animate.
 //
-// The fuller GLB also contains mesh_50_instance_1 exactly co-located with
-// Rectangle_6. That is a redundant render copy, so it is PHYSICALLY REMOVED
-// (never hidden). Geometry/material resources are not disposed because the
-// retained bars share them.
-//
-// To recover the correct authored roof elevation without guessing a pixel/unit
-// offset, v5.17 lets the existing b2/b2a evaluator reach progress=1 once during
-// setup, then detaches the two accepted bars at that FINAL world pose. The rest
-// of the model is immediately returned to progress=0. From that point onward
-// the bars live under static cluster_1 and cannot inherit b2/b2a motion.
+// The redundant mesh_50_instance_1 copy is still PHYSICALLY REMOVED (never
+// hidden). Geometry/material resources are not disposed because retained bars
+// may share them.
 
 const V516 = 'https://cdn.jsdelivr.net/gh/NAPROJECTS-MOBILE/adam-masterplan-3d@b8a717f40618b1f6de27b08065014c1a463a8f8d/calibrate/spline-motion.js';
 
@@ -25,6 +19,7 @@ export { MOTION_WINDOW, TRACKS, AMBIENT_DRIVERS } from 'https://cdn.jsdelivr.net
 import { createSplineMotion as createV516SplineMotion } from 'https://cdn.jsdelivr.net/gh/NAPROJECTS-MOBILE/adam-masterplan-3d@b8a717f40618b1f6de27b08065014c1a463a8f8d/calibrate/spline-motion.js';
 
 const CLUSTER_1_PATH = 'Scene_1/Main_Group/clusters/cluster_1';
+const ROOF_UP_Y = 15;
 
 const STATIC_ROOF_PATHS = [
   'Scene_1/Main_Group/clusters/cluster_1/b2/b2_1/b2a/Group_4/Rectangle_6',
@@ -85,6 +80,13 @@ function restoreLocal(node, pose) {
   node.matrixWorldNeedsUpdate = true;
 }
 
+function raiseLocalY(node, amount) {
+  if (!node) return;
+  node.position.y += amount;
+  node.updateMatrix();
+  node.matrixWorldNeedsUpdate = true;
+}
+
 export function createSplineMotion(model, opts = {}) {
   // Resolve exact GLB paths while they still exist in their authored hierarchy.
   const cluster1 = findByPath(model, CLUSTER_1_PATH);
@@ -106,8 +108,7 @@ export function createSplineMotion(model, opts = {}) {
   // fixes, including the Rectangle_7 duplicate cleanup and static hold.
   const motion = createV516SplineMotion(model, opts);
 
-  // The two roof bars currently inherit the b2/b2a rise. Let that hierarchy
-  // reach its intended END pose once, then freeze the actual bars there.
+  // Let the b2/b2a hierarchy reach the accepted final roof position once.
   if (motion.setProgress) motion.setProgress(1);
   model.updateMatrixWorld(true);
 
@@ -117,22 +118,28 @@ export function createSplineMotion(model, opts = {}) {
       if (opts.debug) console.warn('[ADAM calibration] roof target not found:', target.path);
       continue;
     }
-    if (attachPreservingWorld(target.node, cluster1, model)) heldRoof.push(target.path);
+    if (attachPreservingWorld(target.node, cluster1, model)) {
+      // User-requested extra vertical clearance: +15 after re-parenting to the
+      // static cluster, before capturing the permanent pose.
+      raiseLocalY(target.node, ROOF_UP_Y);
+      heldRoof.push(target.path);
+    }
   }
+  model.updateMatrixWorld(true);
 
-  // Capture the static final roof poses after detaching them from b2/b2a.
+  // Capture the static raised final poses after detaching and applying +15 Y.
   const roofFinalPoses = roofTargets.map(target => ({
     ...target,
     pose: captureLocal(target.node)
   }));
 
-  // Return the rest of the model to the entry state. The detached roof bars do
-  // not move because they are no longer children of the animated hierarchy.
+  // Return the rest of the model to entry state. The detached bars retain the
+  // raised final pose because they no longer inherit b2/b2a transforms.
   if (motion.setProgress) motion.setProgress(0);
   for (const target of roofFinalPoses) restoreLocal(target.node, target.pose);
   model.updateMatrixWorld(true);
 
-  // Reset must preserve the accepted static roof pose as well.
+  // Reset must restore the same absolute captured pose — no accumulation.
   const baseReset = motion.reset?.bind(motion);
   if (baseReset) {
     motion.reset = () => {
@@ -146,13 +153,15 @@ export function createSplineMotion(model, opts = {}) {
   }
 
   motion.staticRoofBars = heldRoof;
+  motion.staticRoofYOffset = ROOF_UP_Y;
   motion.removedRoofDuplicate = removedDuplicate;
 
   if (opts.debug) {
-    console.group('[ADAM calibration] v5.17 static roof bars');
+    console.group('[ADAM calibration] v5.18 static roof bars');
     console.log('base motion source:', V516);
     console.log('physically removed duplicate:', removedDuplicate || '(not found)');
     console.log('held permanently at final roof pose:', heldRoof);
+    console.log('additional static roof Y offset:', ROOF_UP_Y);
     console.log('missing roof targets:', roofTargets.filter(x => !x.node).map(x => x.path));
     console.groupEnd();
   }
