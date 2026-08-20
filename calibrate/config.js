@@ -3,16 +3,19 @@ export const FLAT_THRESHOLD = 0.1;
 
 export const PRESETS = {
   'Official Light': {
+    // Audited fidelity baseline — RGB values:
+    // background 247,247,242 · face 235,235,235 · slab 255,255,255
+    // edge 36,36,36 · glow 134,191,64 · dots 20,20,20 · key 255,246,232
     background:'#f7f7f2',
-    face:'#f6f6f0', faceTint:1.0, faceLift:1.65, faceOpacity:0.88, faceRoughness:0.97, faceMetalness:0.0,
-    slab:'#f2f3ee', slabOpacity:0.95, slabRoughness:1.0,
-    edge:'#d6e296', edgeOpacity:0.52, edgeWidth:1.0, edgeAngle:30,
-    glow:'#d9ef8e', glowOpacity:0.22, glowWidth:3.0, glowStrength:1.0, glowExpansion:0.0,
-    dotColor:'#d8e89b', dotDensity:1.55, dotSize:0.055, dotEdgeSoftness:0.012,
-    dotSkew:0.5, dotFadedOpacity:0.10, dotActiveOpacity:0.48,
+    face:'#ebebeb', faceTint:0.70, faceLift:0.15, faceOpacity:0.94, faceRoughness:0.97, faceMetalness:0.0,
+    slab:'#ffffff', slabOpacity:0.30, slabRoughness:1.0,
+    edge:'#242424', edgeOpacity:0.14, edgeWidth:1.0, edgeAngle:30,
+    glow:'#86bf40', glowOpacity:0.06, glowWidth:7.0, glowStrength:0.55, glowExpansion:0.0015,
+    dotColor:'#141414', dotDensity:17.05, dotSize:0.0275, dotEdgeSoftness:0.012,
+    dotSkew:0.5, dotFadedOpacity:0.05, dotActiveOpacity:0.34,
     rippleSpeed:1.2, rippleFrequency:0.35, rippleWidth:0.30, rippleSoftness:0.08,
     rippleOriginX:0, rippleOriginZ:0,
-    hemisphere:0.6, key:1.4, rim:0.5, exposure:0.85, keyTint:'#fff6e8'
+    hemisphere:0.6, key:1.3, rim:0.35, exposure:0.85, keyTint:'#fff6e8'
   },
   'Soft Lime': {
     background:'#f4f6ea',
@@ -60,38 +63,42 @@ export const CAM = [
   ['zoom','Zoom / distance',0.02,2.5,0.01], ['panX','Pan X',-1.2,1.2,0.01], ['panZ','Pan Z',-1.2,1.2,0.01]
 ];
 export const LIGHT = [
+  ['background','Background colour (RGB)','color'],
   ['hemisphere','Hemisphere',0,2,0.05], ['key','Key intensity',0,3,0.05],
   ['rim','Rim light',0,1.5,0.05], ['exposure','ACES exposure',0.2,1.6,0.01],
-  ['keyTint','Key-light colour','color']
+  ['keyTint','Key-light colour (RGB)','color']
 ];
 export const FACE = [
-  ['face','Face colour','color'], ['faceTint','Face colour strength (1 = exact)',0,1,0.01],
+  ['face','Face colour (RGB)','color'], ['faceTint','Face colour strength (1 = exact)',0,1,0.01],
   ['faceLift','Face brightness / white lift',0,3,0.05],
   ['faceOpacity','Face opacity',0.05,1,0.01], ['faceRoughness','Face roughness',0,1,0.01],
   ['faceMetalness','Face metalness',0,0.3,0.01]
 ];
 export const SLAB = [
-  ['slab','Slab colour','color'], ['slabOpacity','Slab opacity',0.05,1,0.01],
+  ['slab','Slab colour (RGB)','color'], ['slabOpacity','Slab opacity',0.05,1,0.01],
   ['slabRoughness','Slab roughness',0,1,0.01]
 ];
 export const EDGE = [
-  ['edge','Edge colour','color'], ['edgeOpacity','Edge opacity',0,1,0.01],
+  ['edge','Edge colour (RGB)','color'], ['edgeOpacity','Edge opacity',0,1,0.01],
   ['edgeWidth','Edge width (px)',0.25,4,0.05], ['edgeAngle','Edge angle °',1,60,1]
 ];
 export const GLOW = [
-  ['glow','Glow colour','color'], ['glowOpacity','Glow opacity',0,1,0.01],
+  ['glow','Glow colour (RGB)','color'], ['glowOpacity','Glow opacity',0,1,0.01],
   ['glowWidth','Glow width (px)',1,14,0.1], ['glowStrength','Glow strength',0,2,0.05],
   ['glowExpansion','Glow expansion',0,0.02,0.0005]
 ];
 export const DOTS = [
-  ['dotColor','Dot colour','color'],
+  ['dotColor','Dot colour (RGB)','color'],
   ['dotDensity','Dot density / count',0.15,25,0.1],
   ['dotSize','Dot size',0.005,0.25,0.0025],
   ['dotEdgeSoftness','Dot edge softness',0.001,0.15,0.001],
   ['dotSkew','Dot skew',0,1.2,0.01],
   ['dotFadedOpacity','Faded-dot opacity',0,1,0.01],
   ['dotActiveOpacity','Visible-dot opacity',0,1,0.01],
-  ['rippleSpeed','Ripple speed',0,5,0.05],
+  // The shader already uses rippleSpeed as signed phase velocity. Allowing
+  // negative values gives direct control over animation direction without
+  // changing the established dot pattern: + = outward, - = inward.
+  ['rippleSpeed','Ripple speed / direction (+ out · − in)',-5,5,0.05],
   ['rippleFrequency','Ripple frequency',0.05,1.5,0.01],
   ['rippleWidth','Ripple band width',0.02,0.95,0.01],
   ['rippleSoftness','Ripple edge softness',0.001,0.4,0.005],
