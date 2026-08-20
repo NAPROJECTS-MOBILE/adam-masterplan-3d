@@ -1,4 +1,4 @@
-// ADAM calibration motion wrapper — v5.8 + explicit cluster-1 clearances
+// ADAM calibration motion wrapper — v5.9 + inner-b2 visual hold
 //
 // v5.4 fixes an important timeline sampling bug in the pinned v5.3 core:
 // b2a's first authored key is at Spline t=1.50 with scaleY=0. Before that
@@ -9,8 +9,13 @@
 // v5.5 lowers the user-identified cluster_1/floor mesh by exactly 2 local units.
 // v5.8 keeps cluster_1/b12/Rectangle_9_4 at +2 local Y and raises
 // cluster_1/b6/Boolean_9 to +3 local Y.
-// All static visual corrections are applied from captured GLB base Y values so
-// refresh/reset can never accumulate the offsets.
+//
+// v5.9 fixes the remaining strange Play Through rise on five user-identified
+// inner-b2 meshes. Those meshes are visually static in the accepted model, but
+// because they live below the animated b2/b2a parents they inherit the parent's
+// Y translation / scale reveal. We detach ONLY those five meshes from the
+// animated branch after the core binds its drivers, preserving their world
+// transforms exactly. Their materials/edge/glow treatment remains unchanged.
 
 export { MOTION_WINDOW, TRACKS, AMBIENT_DRIVERS } from 'https://cdn.jsdelivr.net/gh/NAPROJECTS-MOBILE/adam-masterplan-3d@8de5103d184ab80037f788834abe3d748cc50c99/calibrate/spline-motion.js';
 import { createSplineMotion as createCoreSplineMotion } from 'https://cdn.jsdelivr.net/gh/NAPROJECTS-MOBILE/adam-masterplan-3d@8de5103d184ab80037f788834abe3d748cc50c99/calibrate/spline-motion.js';
@@ -29,6 +34,17 @@ const PAD_PATHS = [
 ];
 
 const FLOOR_PATH = 'Scene_1/Main_Group/clusters/cluster_1/floor';
+const CLUSTER_1_PATH = 'Scene_1/Main_Group/clusters/cluster_1';
+
+// These five are the exact picker targets from the latest visual audit.
+// Rectangle_7 is intentionally NOT included here.
+const HOLD_STATIC_PATHS = [
+  'Scene_1/Main_Group/clusters/cluster_1/b2/b2_1/Rectangle_4',
+  'Scene_1/Main_Group/clusters/cluster_1/b2/b2_1/b2a/Group_4_1/Rectangle_29_1',
+  'Scene_1/Main_Group/clusters/cluster_1/b2/b2_1/b2a/Group_4/Rectangle_29',
+  'Scene_1/Main_Group/clusters/cluster_1/b2/b2_1/b2a/Group_4/mesh_51_instance_3',
+  'Scene_1/Main_Group/clusters/cluster_1/b2/b2_1/b2a/Group_4/mesh_51_instance_2'
+];
 
 const STATIC_Y_OFFSETS = [
   { path: 'Scene_1/Main_Group/clusters/cluster_1/b6/Boolean_9', amount: 3 },
@@ -96,6 +112,10 @@ export function createSplineMotion(model, opts = {}) {
     return { path, node, base: captureLocal(node) };
   });
 
+  // Capture the five exact visual-hold targets BEFORE any re-parenting.
+  const holdTargets = HOLD_STATIC_PATHS.map(path => ({ path, node: findByPath(model, path) }));
+  const cluster1 = findByPath(model, CLUSTER_1_PATH);
+
   // Capture static authored Y values before applying calibration offsets.
   const floor = findByPath(model, FLOOR_PATH);
   const floorBaseY = floor?.position.y ?? null;
@@ -104,7 +124,31 @@ export function createSplineMotion(model, opts = {}) {
     return { path, amount, node, baseY: node?.position.y ?? null };
   });
 
+  // Bind the authoritative Spline drivers first. The core keeps references to
+  // the animated b2/b2a parents, so moving selected children out afterward does
+  // not disturb the driver bindings.
   const motion = createCoreSplineMotion(model, opts);
+
+  // Freeze ONLY the five accepted static meshes against b2/b2a Play Through.
+  // Object3D.attach preserves each mesh's current WORLD transform while moving
+  // it to cluster_1, so there is no visual jump and no inherited rise/scale.
+  const heldStatic = [];
+  if (cluster1) {
+    model.updateMatrixWorld(true);
+    for (const item of holdTargets) {
+      if (!item.node) {
+        if (opts.debug) console.warn('[ADAM calibration] static b2 hold target not found:', item.path);
+        continue;
+      }
+      cluster1.attach(item.node);
+      item.node.updateMatrix();
+      item.node.matrixWorldNeedsUpdate = true;
+      heldStatic.push(item.path);
+    }
+    model.updateMatrixWorld(true);
+  } else if (opts.debug) {
+    console.warn('[ADAM calibration] cluster_1 not found; inner-b2 static hold skipped');
+  }
 
   // Fix pre-first-key semantics for b2a. The pinned core's sample() returns
   // the first key for t < firstKey, which incorrectly forces scaleY=0 at
@@ -170,7 +214,8 @@ export function createSplineMotion(model, opts = {}) {
   model.updateMatrixWorld(true);
 
   if (opts.debug) {
-    console.group('[ADAM calibration] v5.8 fixes');
+    console.group('[ADAM calibration] v5.9 fixes');
+    console.log('held static through Play Through:', heldStatic);
     console.log('b2a pre-key base preserved until Spline t=1.50:',
       b2aPreKey.map(x => ({ path: x.path, found: !!x.node })));
     console.log('pads Y', PAD_DOWN, PAD_PATHS);
