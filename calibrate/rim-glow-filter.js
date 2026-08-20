@@ -1,23 +1,23 @@
 import * as THREE from 'three';
 import { LineSegments2 } from 'three/addons/lines/LineSegments2.js';
 import { LineSegmentsGeometry } from 'three/addons/lines/LineSegmentsGeometry.js';
+import { FORCE_GLOW_PATHS } from './glow-targets.js';
 
 /*
   ADAM rim-glow policy
   --------------------
-  The calibrator's original edge builder only creates glow for meshes classified
-  as `solids` by world-space height. Several perfectly valid building blocks are
-  thin/rotated and fall into the `flats` bucket, so they never receive ANY glow.
+  The calibrator's native edge builder only creates glow for meshes classified
+  as `solids` by world-space height. A number of user-confirmed architectural
+  targets are thin/rotated and fall into the `flats` bucket, so they otherwise
+  receive no glow.
 
-  This module fixes that at render time:
+  Policy:
     1. every GLB mesh under Main_Group/clusters is glow-eligible by default;
-    2. meshes that already have app-v2 glow are left alone;
-    3. missing glow is added as a local child, so it follows object motion;
-    4. ONLY the exact seven paths below are excluded;
-    5. the app's existing Glow toggle/style/resolution are mirrored from the
-       current native glow layer, so supplemental glow behaves like native glow.
-
-  Full paths are mandatory because Rectangle_* names repeat throughout the GLB.
+    2. every path in FORCE_GLOW_PATHS is ALWAYS glow-eligible;
+    3. native app-v2 glow is left alone;
+    4. missing glow is added locally so it follows object motion;
+    5. legacy exclusions remain only for paths that are NOT force-selected;
+    6. style/visibility/resolution mirror the app's existing glow layer.
 */
 export const NO_RIM_GLOW_PATHS = new Set([
   'Scene_1/Main_Group/clusters/cluster_3/villa/Rectangle_2_4',
@@ -39,6 +39,14 @@ function pathOf(object) {
   return parts.reverse().join('/');
 }
 
+function isForced(path) {
+  return FORCE_GLOW_PATHS.has(path);
+}
+
+function isExcluded(path) {
+  return NO_RIM_GLOW_PATHS.has(path) && !isForced(path);
+}
+
 function isNativeOrSupplementalGlow(object) {
   return object?.isLineSegments2 && object.material?.blending === THREE.AdditiveBlending;
 }
@@ -51,7 +59,7 @@ function isEligibleClusterMesh(object) {
   if (!object?.isMesh || object.isLineSegments2) return false;
   if (!object.geometry?.attributes?.position) return false;
   const path = pathOf(object);
-  return path.includes('Scene_1/Main_Group/clusters/');
+  return isForced(path) || path.includes('Scene_1/Main_Group/clusters/');
 }
 
 function makeLineGeometry(mesh, thresholdAngle = 30) {
@@ -80,23 +88,26 @@ function findNativeGlowTemplate(scene) {
   scene.traverse(object => {
     if (template || !isNativeOrSupplementalGlow(object) || isSupplementalGlow(object)) return;
     if (!object.parent) return;
-    if (NO_RIM_GLOW_PATHS.has(pathOf(object.parent))) return;
+    if (isExcluded(pathOf(object.parent))) return;
     template = object;
   });
   return template;
 }
 
-/* Existing app-created glow still needs the blacklist enforced. */
+/* Existing app-created glow still needs the legacy blacklist enforced, except
+   for any target the user explicitly selected for glow. */
 const originalUpdateMatrixWorld = LineSegments2.prototype.updateMatrixWorld;
 LineSegments2.prototype.updateMatrixWorld = function updateMatrixWorld(force) {
   originalUpdateMatrixWorld.call(this, force);
   if (!isNativeOrSupplementalGlow(this) || !this.parent) return;
-  if (NO_RIM_GLOW_PATHS.has(pathOf(this.parent))) this.visible = false;
+  const path = pathOf(this.parent);
+  if (isExcluded(path)) this.visible = false;
 };
 
 const supplemental = new Set();
 let templateIdentity = null;
 let lastAddedCount = -1;
+let lastForcedResolved = -1;
 
 function destroySupplemental() {
   for (const line of supplemental) {
@@ -173,12 +184,15 @@ function copyGlowStyle(template, line) {
 function rebuildMissingGlow(scene, template) {
   destroySupplemental();
   let added = 0;
+  let forcedResolved = 0;
 
   scene.traverse(mesh => {
     if (!isEligibleClusterMesh(mesh)) return;
 
     const path = pathOf(mesh);
-    if (NO_RIM_GLOW_PATHS.has(path)) {
+    if (isForced(path)) forcedResolved++;
+
+    if (isExcluded(path)) {
       for (const glow of directNativeGlowChildren(mesh)) glow.visible = false;
       return;
     }
@@ -189,9 +203,14 @@ function rebuildMissingGlow(scene, template) {
     added += addSupplementalGlow(mesh, template);
   });
 
-  if (added !== lastAddedCount) {
+  if (added !== lastAddedCount || forcedResolved !== lastForcedResolved) {
     lastAddedCount = added;
-    console.info(`[ADAM rim glow] added ${added} supplemental glow layer(s); blacklist=${NO_RIM_GLOW_PATHS.size}`);
+    lastForcedResolved = forcedResolved;
+    console.info(
+      `[ADAM rim glow] added ${added} supplemental glow layer(s); ` +
+      `forced targets resolved=${forcedResolved}/${FORCE_GLOW_PATHS.size}; ` +
+      `legacy blacklist=${NO_RIM_GLOW_PATHS.size}`
+    );
   }
 }
 
@@ -208,7 +227,8 @@ function syncRimGlow(scene) {
 
   for (const line of supplemental) {
     if (!line.parent) continue;
-    const excluded = NO_RIM_GLOW_PATHS.has(pathOf(line.parent));
+    const path = pathOf(line.parent);
+    const excluded = isExcluded(path);
     line.visible = excluded ? false : template.visible;
     if (!excluded) copyGlowStyle(template, line);
   }
@@ -222,4 +242,5 @@ THREE.WebGLRenderer.prototype.render = function render(scene, camera) {
 };
 
 window.__ADAM_NO_RIM_GLOW_PATHS = NO_RIM_GLOW_PATHS;
+window.__ADAM_FORCE_GLOW_PATHS = FORCE_GLOW_PATHS;
 window.__ADAM_RIM_GLOW_SUPPLEMENTAL = supplemental;
