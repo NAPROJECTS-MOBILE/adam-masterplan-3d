@@ -1,17 +1,24 @@
 import * as THREE from 'three';
 import { LineSegments2 } from 'three/addons/lines/LineSegments2.js';
 import { LineSegmentsGeometry } from 'three/addons/lines/LineSegmentsGeometry.js';
+import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 
-// Exact five thin architectural meshes that already follow the normal
-// Building Material controls. They should also receive the normal EDGE layer,
-// but must not be reclassified as solids or receive any supplemental glow.
-const EDGE_ONLY_PATHS = new Set([
-  'Scene_1/Main_Group/clusters/cluster_2/Rectangle_2_5',
-  'Scene_1/Main_Group/clusters/cluster_2/Rectangle_10',
-  'Scene_1/Main_Group/clusters/cluster_2/Rectangle_3_2',
-  'Scene_1/Main_Group/clusters/cluster_1/floor',
-  'Scene_1/Main_Group/clusters/cluster_1/b10/Rectangle_9'
-]);
+/*
+  ADAM calibrator — persistent edge-only sync for the five thin architectural
+  meshes that are styled as normal building faces but intentionally remain out
+  of the native solid/glow classification.
+
+  Important: this module does NOT add glow and does NOT change mesh transforms,
+  materials, motion, camera, lighting, keyframes, slab or dots.
+*/
+
+const TARGETS = [
+  { path:'Scene_1/Main_Group/clusters/cluster_2/Rectangle_2_5', name:'Rectangle_2_5', ancestor:'cluster_2' },
+  { path:'Scene_1/Main_Group/clusters/cluster_2/Rectangle_10',  name:'Rectangle_10',  ancestor:'cluster_2' },
+  { path:'Scene_1/Main_Group/clusters/cluster_2/Rectangle_3_2', name:'Rectangle_3_2', ancestor:'cluster_2' },
+  { path:'Scene_1/Main_Group/clusters/cluster_1/floor',         name:'floor',         ancestor:'cluster_1' },
+  { path:'Scene_1/Main_Group/clusters/cluster_1/b10/Rectangle_9', name:'Rectangle_9', ancestor:'b10' }
+];
 
 function pathOf(object) {
   const parts = [];
@@ -23,29 +30,68 @@ function pathOf(object) {
   return parts.reverse().join('/');
 }
 
-function isGlowLine(object) {
-  return object?.isLineSegments2 && object.material?.blending === THREE.AdditiveBlending;
+function edgeControls() {
+  const wraps = [...document.querySelectorAll('#edgeCtls .ctl')];
+  const input = i => wraps[i]?.querySelector('input');
+  const color = input(0)?.value || '#d6e296';
+  const opacity = Number(input(1)?.value);
+  const width = Number(input(2)?.value);
+  const angle = Number(input(3)?.value);
+  return {
+    color,
+    opacity: Number.isFinite(opacity) ? opacity : 0.52,
+    width: Number.isFinite(width) ? width : 1,
+    angle: Number.isFinite(angle) ? angle : 30
+  };
 }
 
-function isSupplementalEdge(object) {
-  return !!object?.userData?.adamFiveFaceEdge;
+function edgesVisible() {
+  const button = document.getElementById('tEdges');
+  return !button || button.classList.contains('on');
 }
 
-function isNativeEdge(object) {
-  return object?.isLineSegments2 && !isGlowLine(object) && !isSupplementalEdge(object);
+function canvasSize() {
+  const canvas = document.querySelector('[data-scene3d-canvas]');
+  if (!canvas) return { width:1, height:1 };
+  const rect = canvas.getBoundingClientRect();
+  return {
+    width: Math.max(1, Math.round(rect.width)),
+    height: Math.max(1, Math.round(rect.height))
+  };
 }
 
-function directNativeEdgeChildren(mesh) {
-  return mesh.children.filter(isNativeEdge);
+function resolveTargets(scene) {
+  const meshes = [];
+  scene.traverse(object => {
+    if (object?.isMesh && object.geometry?.attributes?.position) meshes.push(object);
+  });
+
+  const resolved = [];
+  const used = new Set();
+
+  for (const target of TARGETS) {
+    let mesh = meshes.find(m => !used.has(m) && pathOf(m) === target.path) || null;
+
+    if (!mesh) {
+      const named = meshes.filter(m => !used.has(m) && m.name === target.name);
+      const hinted = named.filter(m => {
+        const path = pathOf(m);
+        return path.includes(`/${target.ancestor}/`) || path.endsWith(`/${target.ancestor}/${target.name}`);
+      });
+      if (hinted.length === 1) mesh = hinted[0];
+      else if (named.length === 1) mesh = named[0];
+    }
+
+    if (mesh) {
+      used.add(mesh);
+      resolved.push({ ...target, mesh });
+    }
+  }
+
+  return resolved;
 }
 
-function currentEdgeAngle() {
-  const controls = [...document.querySelectorAll('#edgeCtls .ctl')];
-  const value = Number(controls[3]?.querySelector('input')?.value);
-  return Number.isFinite(value) ? value : 30;
-}
-
-function makeLineGeometry(mesh, angle) {
+function makeGeometry(mesh, angle) {
   const edges = new THREE.EdgesGeometry(mesh.geometry, angle);
   const position = edges.attributes.position;
   if (!position || position.count < 2) {
@@ -62,103 +108,95 @@ function makeLineGeometry(mesh, angle) {
   return geometry;
 }
 
-const supplementalEdges = new Set();
-let lastNativeTemplate = null;
-let lastResolvedSignature = '';
+const material = new LineMaterial({ transparent:true, depthTest:true, depthWrite:true });
+material.toneMapped = false;
 
-function destroySupplementalEdges() {
-  for (const line of supplementalEdges) {
+let targets = [];
+let lines = [];
+let resolvedScene = null;
+let lastAngle = null;
+let lastSignature = '';
+
+function clearLines() {
+  for (const line of lines) {
     line.removeFromParent();
     line.geometry?.dispose?.();
   }
-  supplementalEdges.clear();
+  lines = [];
 }
 
-function addEdge(mesh, template, angle, instanceMatrix = null) {
-  const geometry = makeLineGeometry(mesh, angle);
-  if (!geometry) return 0;
+function rebuild(scene, angle) {
+  clearLines();
+  targets = resolveTargets(scene);
 
-  const line = new LineSegments2(geometry, template.material);
-  line.userData.adamFiveFaceEdge = true;
-  line.frustumCulled = false;
-  line.renderOrder = template.renderOrder || 3;
+  for (const target of targets) {
+    const mesh = target.mesh;
+    const geometry = makeGeometry(mesh, angle);
+    if (!geometry) continue;
 
-  if (instanceMatrix) {
-    line.matrixAutoUpdate = false;
-    line.matrix.copy(instanceMatrix);
-  }
-
-  mesh.add(line);
-  supplementalEdges.add(line);
-  return 1;
-}
-
-function rebuild(scene, template) {
-  destroySupplementalEdges();
-
-  const angle = currentEdgeAngle();
-  const resolved = [];
-  let added = 0;
-
-  scene.traverse(mesh => {
-    if (!mesh?.isMesh || !mesh.geometry?.attributes?.position) return;
-    const path = pathOf(mesh);
-    if (!EDGE_ONLY_PATHS.has(path)) return;
-
-    resolved.push(path);
-    if (directNativeEdgeChildren(mesh).length) return;
+    const add = instanceMatrix => {
+      const line = new LineSegments2(geometry.clone(), material);
+      line.userData.adamFiveFaceEdge = true;
+      line.frustumCulled = false;
+      line.renderOrder = 3;
+      if (instanceMatrix) {
+        line.matrixAutoUpdate = false;
+        line.matrix.copy(instanceMatrix);
+      }
+      mesh.add(line);
+      lines.push(line);
+    };
 
     if (mesh.isInstancedMesh) {
       const matrix = new THREE.Matrix4();
       for (let i = 0; i < mesh.count; i++) {
         mesh.getMatrixAt(i, matrix);
-        added += addEdge(mesh, template, angle, matrix.clone());
+        add(matrix.clone());
       }
     } else {
-      added += addEdge(mesh, template, angle);
+      add(null);
     }
-  });
 
-  const signature = resolved.sort().join('|');
-  if (signature !== lastResolvedSignature) {
-    lastResolvedSignature = signature;
-    console.info(`[ADAM five-face edges] resolved ${resolved.length}/${EDGE_ONLY_PATHS.size}; added ${added} edge layer(s)`);
-    const missing = [...EDGE_ONLY_PATHS].filter(path => !resolved.includes(path));
-    if (missing.length) console.warn('[ADAM five-face edges] unresolved targets:', missing);
+    geometry.dispose();
+  }
+
+  const signature = targets.map(t => `${t.path}=>${pathOf(t.mesh)}`).sort().join('|');
+  if (signature !== lastSignature) {
+    lastSignature = signature;
+    console.info(`[ADAM five-face edges v2] resolved ${targets.length}/${TARGETS.length}; created ${lines.length} edge layer(s)`);
+    const foundPaths = new Set(targets.map(t => t.path));
+    const missing = TARGETS.filter(t => !foundPaths.has(t.path)).map(t => t.path);
+    if (missing.length) console.warn('[ADAM five-face edges v2] unresolved targets:', missing);
   }
 }
 
-function findNativeEdgeTemplate(scene) {
-  let template = null;
-  scene.traverse(object => {
-    if (!template && isNativeEdge(object) && object.parent?.isMesh) template = object;
-  });
-  return template;
-}
+function sync(scene) {
+  const controls = edgeControls();
 
-function syncFiveFaceEdges(scene) {
-  const template = findNativeEdgeTemplate(scene);
-  if (!template) return;
-
-  // Native rebuildEdges() replaces the native line objects whenever Edge angle
-  // changes. Rebuild these five at the same time so they track that control too.
-  if (template !== lastNativeTemplate) {
-    lastNativeTemplate = template;
-    rebuild(scene, template);
+  if (scene !== resolvedScene || lastAngle !== controls.angle || !lines.length) {
+    resolvedScene = scene;
+    lastAngle = controls.angle;
+    rebuild(scene, controls.angle);
   }
 
-  // Share the native LineMaterial directly, and mirror its visibility so Edge
-  // colour/opacity/width/resolution and the Edges view toggle stay identical.
-  for (const line of supplementalEdges) {
-    if (line.parent) line.visible = template.visible;
-  }
+  material.color.set(controls.color);
+  material.opacity = THREE.MathUtils.clamp(controls.opacity, 0, 1);
+  material.linewidth = Math.max(0.01, controls.width);
+  material.transparent = true;
+  material.needsUpdate = true;
+
+  const size = canvasSize();
+  material.resolution.set(size.width, size.height);
+
+  const visible = edgesVisible();
+  for (const line of lines) line.visible = visible;
 }
 
 const previousRender = THREE.WebGLRenderer.prototype.render;
 THREE.WebGLRenderer.prototype.render = function render(scene, camera) {
-  syncFiveFaceEdges(scene);
+  sync(scene);
   return previousRender.call(this, scene, camera);
 };
 
-window.__ADAM_FIVE_FACE_EDGE_PATHS = [...EDGE_ONLY_PATHS];
-window.__ADAM_FIVE_FACE_EDGES = supplementalEdges;
+window.__ADAM_FIVE_FACE_EDGE_TARGETS = TARGETS.map(t => t.path);
+window.__ADAM_FIVE_FACE_EDGES = lines;
