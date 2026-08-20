@@ -35,7 +35,7 @@ THREE.Box3.prototype.getSize = function(target) {
 };
 
 try {
-  await import('./app-v2.js?v=cal-514-rectangle7-twin-cleanup-20260820-1132');
+  await import('./app-v2.js?v=cal-515-rectangle7-vertical-twin-20260820-1139');
 } finally {
   THREE.Box3.prototype.setFromObject = originalSetFromObject;
   THREE.Box3.prototype.getSize = originalGetSize;
