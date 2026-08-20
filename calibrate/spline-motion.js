@@ -1,4 +1,4 @@
-// ADAM calibration motion wrapper — v5.6 + explicit cluster-1 clearances
+// ADAM calibration motion wrapper — v5.8 + explicit cluster-1 clearances
 //
 // v5.4 fixes an important timeline sampling bug in the pinned v5.3 core:
 // b2a's first authored key is at Spline t=1.50 with scaleY=0. Before that
@@ -7,8 +7,8 @@
 // b2a geometry into the base plane from t=1.00 through 1.50.
 //
 // v5.5 lowers the user-identified cluster_1/floor mesh by exactly 2 local units.
-// v5.6 raises the user-identified cluster_1/b6/Boolean_9 and
-// cluster_1/b12/Rectangle_9_4 meshes by exactly 2 local units.
+// v5.8 keeps cluster_1/b12/Rectangle_9_4 at +2 local Y and raises
+// cluster_1/b6/Boolean_9 to +3 local Y.
 // All static visual corrections are applied from captured GLB base Y values so
 // refresh/reset can never accumulate the offsets.
 
@@ -18,7 +18,6 @@ import { createSplineMotion as createCoreSplineMotion } from 'https://cdn.jsdeli
 const PAD_DOWN = -2;
 const BLOCK_UP = 2;
 const FLOOR_DOWN = -2;
-const STATIC_BLOCK_UP = 2;
 const MOTION_START = 1.0;
 const MOTION_END = 1.75;
 const B2A_FIRST_KEY = 1.5;
@@ -31,9 +30,9 @@ const PAD_PATHS = [
 
 const FLOOR_PATH = 'Scene_1/Main_Group/clusters/cluster_1/floor';
 
-const STATIC_UP_PATHS = [
-  'Scene_1/Main_Group/clusters/cluster_1/b6/Boolean_9',
-  'Scene_1/Main_Group/clusters/cluster_1/b12/Rectangle_9_4'
+const STATIC_Y_OFFSETS = [
+  { path: 'Scene_1/Main_Group/clusters/cluster_1/b6/Boolean_9', amount: 3 },
+  { path: 'Scene_1/Main_Group/clusters/cluster_1/b12/Rectangle_9_4', amount: 2 }
 ];
 
 const B2A_PATHS = [
@@ -100,9 +99,9 @@ export function createSplineMotion(model, opts = {}) {
   // Capture static authored Y values before applying calibration offsets.
   const floor = findByPath(model, FLOOR_PATH);
   const floorBaseY = floor?.position.y ?? null;
-  const staticUp = STATIC_UP_PATHS.map(path => {
+  const staticOffsets = STATIC_Y_OFFSETS.map(({ path, amount }) => {
     const node = findByPath(model, path);
-    return { path, node, baseY: node?.position.y ?? null };
+    return { path, amount, node, baseY: node?.position.y ?? null };
   });
 
   const motion = createCoreSplineMotion(model, opts);
@@ -138,8 +137,8 @@ export function createSplineMotion(model, opts = {}) {
   // Static cluster-1 corrections are always set from their captured GLB Y.
   const applyStaticOffsets = () => {
     if (floor && floorBaseY != null) setAbsoluteY(floor, floorBaseY + FLOOR_DOWN);
-    for (const { node, baseY } of staticUp) {
-      if (node && baseY != null) setAbsoluteY(node, baseY + STATIC_BLOCK_UP);
+    for (const { node, baseY, amount } of staticOffsets) {
+      if (node && baseY != null) setAbsoluteY(node, baseY + amount);
     }
   };
   applyStaticOffsets();
@@ -171,7 +170,7 @@ export function createSplineMotion(model, opts = {}) {
   model.updateMatrixWorld(true);
 
   if (opts.debug) {
-    console.group('[ADAM calibration] v5.6 fixes');
+    console.group('[ADAM calibration] v5.8 fixes');
     console.log('b2a pre-key base preserved until Spline t=1.50:',
       b2aPreKey.map(x => ({ path: x.path, found: !!x.node })));
     console.log('pads Y', PAD_DOWN, PAD_PATHS);
@@ -179,12 +178,13 @@ export function createSplineMotion(model, opts = {}) {
     console.log('Boolean_12 Y', BLOCK_UP, '(after ambient each frame)');
     console.log('cluster_1/floor Y', FLOOR_DOWN,
       floor ? `(base ${floorBaseY} -> ${floorBaseY + FLOOR_DOWN})` : '(not found)');
-    console.log('cluster_1 static blocks Y', STATIC_BLOCK_UP,
-      staticUp.map(x => ({
+    console.log('cluster_1 static Y offsets',
+      staticOffsets.map(x => ({
         path: x.path,
+        amount: x.amount,
         found: !!x.node,
         baseY: x.baseY,
-        targetY: x.baseY == null ? null : x.baseY + STATIC_BLOCK_UP
+        targetY: x.baseY == null ? null : x.baseY + x.amount
       })));
     console.groupEnd();
   }
