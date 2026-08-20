@@ -1,12 +1,12 @@
-// ADAM calibration motion wrapper — v5.19 / static roof bars +19 Y
+// ADAM calibration motion wrapper — v5.20 / static roof bars +23 Y
 //
 // User-confirmed correction for the two inner-b2 roof bars:
 //   - Rectangle_6
 //   - mesh_50_instance_2
 //
 // They remain permanently static at the accepted final/top roof pose from v5.17,
-// and are now raised a total +19 local Y units after being detached to
-// cluster_1 (+15 previously, plus an additional +4 requested now). This offset
+// and are now raised a total +23 local Y units after being detached to
+// cluster_1 (+19 previously, plus an additional +4 requested now). This offset
 // is captured into their static pose, so Play Through and Reset cannot make it
 // accumulate or animate.
 //
@@ -20,7 +20,7 @@ export { MOTION_WINDOW, TRACKS, AMBIENT_DRIVERS } from 'https://cdn.jsdelivr.net
 import { createSplineMotion as createV516SplineMotion } from 'https://cdn.jsdelivr.net/gh/NAPROJECTS-MOBILE/adam-masterplan-3d@b8a717f40618b1f6de27b08065014c1a463a8f8d/calibrate/spline-motion.js';
 
 const CLUSTER_1_PATH = 'Scene_1/Main_Group/clusters/cluster_1';
-const ROOF_UP_Y = 19;
+const ROOF_UP_Y = 23;
 
 const STATIC_ROOF_PATHS = [
   'Scene_1/Main_Group/clusters/cluster_1/b2/b2_1/b2a/Group_4/Rectangle_6',
@@ -146,7 +146,7 @@ export function createSplineMotion(model, opts = {}) {
   motion.removedRoofDuplicate = removedDuplicate;
 
   if (opts.debug) {
-    console.group('[ADAM calibration] v5.19 static roof bars');
+    console.group('[ADAM calibration] v5.20 static roof bars');
     console.log('base motion source:', V516);
     console.log('physically removed duplicate:', removedDuplicate || '(not found)');
     console.log('held permanently at final roof pose:', heldRoof);
