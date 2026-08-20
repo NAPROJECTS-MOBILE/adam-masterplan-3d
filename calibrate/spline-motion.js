@@ -1,23 +1,16 @@
-// ADAM calibration motion wrapper — v5.15 / remove rising Rectangle_7 duplicate
+// ADAM calibration motion wrapper — v5.16 / remove exact lower Rectangle_7 duplicate
 //
-// The screenshot after v5.14 shows why the previous detector was too strict:
-// the remaining duplicate is BELOW the accepted Rectangle_7 at rest and then
-// rises upward with b2/b2a. It therefore cannot have the same complete world
-// matrix as the retained block before playback.
+// The fuller GLB contains an exact co-located mesh twin of the accepted
+// Rectangle_7 under the same Group_4. GLTFLoader names that raw duplicate
+// `mesh_51_instance_1`. It is the copy that starts lower vertically and rises
+// with the b2/b2a hierarchy.
 //
-// v5.15 identifies the unwanted copy by what is visually invariant instead:
-//   1. it is another mesh inside cluster_1/b2;
-//   2. it has the same Rectangle_7 geometry/topology;
-//   3. its WORLD X/Z footprint is aligned with the retained Rectangle_7;
-//   4. Y is deliberately ignored, because Y is exactly where the bad copy is
-//      displaced and animated.
-//
-// Any matching vertical-stack twin is PHYSICALLY REMOVED from the scene graph.
-// Nothing is hidden. Nearby parallel roof bars survive because their X/Z
-// centres do not align with Rectangle_7. The retained Rectangle_7 is then moved
-// out of the b2a hierarchy before motion evaluation so it remains static.
-
-import * as THREE from 'three';
+// Previous geometry/footprint heuristics were intentionally removed here.
+// v5.16 is surgical: physically remove ONLY the exact runtime path
+// `.../Group_4/mesh_51_instance_1`, then detach the accepted Rectangle_7 from
+// b2a before motion evaluation so the retained block stays visible and static.
+// Nothing is hidden, cloned, or disposed. The adjacent instance_2 / instance_3
+// blocks are left untouched.
 
 const V512 = 'https://cdn.jsdelivr.net/gh/NAPROJECTS-MOBILE/adam-masterplan-3d@272e77fa24efc82aef2ddc3387df975758f8382e/calibrate/spline-motion.js';
 
@@ -25,8 +18,8 @@ export { MOTION_WINDOW, TRACKS, AMBIENT_DRIVERS } from 'https://cdn.jsdelivr.net
 import { createSplineMotion as createV512SplineMotion } from 'https://cdn.jsdelivr.net/gh/NAPROJECTS-MOBILE/adam-masterplan-3d@272e77fa24efc82aef2ddc3387df975758f8382e/calibrate/spline-motion.js';
 
 const RECTANGLE_7_PATH = 'Scene_1/Main_Group/clusters/cluster_1/b2/b2_1/b2a/Group_4/Rectangle_7';
+const BAD_RECTANGLE_7_DUPLICATE_PATH = 'Scene_1/Main_Group/clusters/cluster_1/b2/b2_1/b2a/Group_4/mesh_51_instance_1';
 const CLUSTER_1_PATH = 'Scene_1/Main_Group/clusters/cluster_1';
-const B2_PREFIX = 'Scene_1/Main_Group/clusters/cluster_1/b2/';
 
 function pathOf(object) {
   const parts = [];
@@ -50,118 +43,6 @@ function forceVisible(node) {
   node.traverse(child => { child.visible = true; });
 }
 
-function geometryShape(geometry) {
-  if (!geometry) return null;
-  geometry.computeBoundingBox();
-  const bb = geometry.boundingBox;
-  const size = bb ? bb.getSize(new THREE.Vector3()) : new THREE.Vector3();
-  const dims = [Math.abs(size.x), Math.abs(size.y), Math.abs(size.z)]
-    .sort((a, b) => a - b);
-  return {
-    positionCount: geometry.attributes?.position?.count ?? -1,
-    indexCount: geometry.index?.count ?? -1,
-    dims
-  };
-}
-
-function close(a, b, eps) {
-  return Math.abs(a - b) <= eps;
-}
-
-function sameGeometryFamily(a, b) {
-  if (!a?.geometry || !b?.geometry) return false;
-  if (a.geometry === b.geometry) return true;
-
-  const ga = geometryShape(a.geometry);
-  const gb = geometryShape(b.geometry);
-  if (!ga || !gb) return false;
-  if (ga.positionCount !== gb.positionCount || ga.indexCount !== gb.indexCount) return false;
-
-  const dimScale = Math.max(...ga.dims, ...gb.dims, 1);
-  const dimEps = dimScale * 1e-5;
-  return ga.dims.every((v, i) => close(v, gb.dims[i], dimEps));
-}
-
-function worldBox(mesh) {
-  return new THREE.Box3().setFromObject(mesh);
-}
-
-function sameXZFootprint(candidate, reference) {
-  const rb = worldBox(reference);
-  const cb = worldBox(candidate);
-  if (rb.isEmpty() || cb.isEmpty()) return false;
-
-  const rc = rb.getCenter(new THREE.Vector3());
-  const cc = cb.getCenter(new THREE.Vector3());
-  const rs = rb.getSize(new THREE.Vector3());
-  const cs = cb.getSize(new THREE.Vector3());
-
-  // Relative tolerance only in plan. The bad copy may be arbitrarily displaced
-  // in Y, and its Y size may also be collapsed by an animated parent state.
-  const planScale = Math.max(rs.x, rs.z, cs.x, cs.z, 1e-4);
-  const centreEps = Math.max(1e-5, planScale * 0.035);
-  const sizeEps = Math.max(1e-5, planScale * 0.035);
-
-  return (
-    close(rc.x, cc.x, centreEps) &&
-    close(rc.z, cc.z, centreEps) &&
-    close(rs.x, cs.x, sizeEps) &&
-    close(rs.z, cs.z, sizeEps)
-  );
-}
-
-function removeVerticalRectangle7Twins(model, rectangle7, opts) {
-  if (!rectangle7?.isMesh) return { removed: [], audited: [] };
-
-  model.updateMatrixWorld(true);
-  const removed = [];
-  const audited = [];
-  const toRemove = [];
-  const refBox = worldBox(rectangle7);
-  const refCenter = refBox.getCenter(new THREE.Vector3());
-
-  model.traverse(object => {
-    if (object === rectangle7 || !object.isMesh || !object.parent) return;
-
-    const path = pathOf(object);
-    if (!path.startsWith(B2_PREFIX)) return;
-    if (!sameGeometryFamily(object, rectangle7)) return;
-
-    const box = worldBox(object);
-    const center = box.getCenter(new THREE.Vector3());
-    const aligned = sameXZFootprint(object, rectangle7);
-
-    audited.push({
-      path,
-      alignedXZ: aligned,
-      deltaX: center.x - refCenter.x,
-      deltaY: center.y - refCenter.y,
-      deltaZ: center.z - refCenter.z
-    });
-
-    if (aligned) toRemove.push(object);
-  });
-
-  // Collect first, remove second: never mutate the tree during traverse().
-  for (const twin of toRemove) {
-    if (!twin.parent) continue;
-    const path = pathOf(twin);
-    twin.parent.remove(twin);
-    removed.push(path || twin.name || '(unnamed Rectangle_7 vertical twin)');
-  }
-
-  model.updateMatrixWorld(true);
-
-  if (opts?.debug) {
-    console.group('[ADAM calibration] Rectangle_7 vertical-stack audit');
-    console.table(audited);
-    console.log('physically removed aligned twins:', removed);
-    console.groupEnd();
-  }
-
-  return { removed, audited };
-}
-
 function attachToCluster(node, cluster, model) {
   if (!node || !cluster) return false;
   model.updateMatrixWorld(true);
@@ -174,21 +55,27 @@ function attachToCluster(node, cluster, model) {
 }
 
 export function createSplineMotion(model, opts = {}) {
-  // Capture the accepted object at the exact user-confirmed GLB path.
+  // Resolve both exact GLB paths BEFORE any motion or re-parenting changes them.
   const rectangle7 = findByPath(model, RECTANGLE_7_PATH);
+  const duplicate = findByPath(model, BAD_RECTANGLE_7_DUPLICATE_PATH);
   const cluster1 = findByPath(model, CLUSTER_1_PATH);
-  const originalSourcePath = rectangle7 ? pathOf(rectangle7) : RECTANGLE_7_PATH;
 
-  // Remove copies stacked under/over the same plan footprint BEFORE any b2/b2a
-  // transform is sampled. This is the key difference from the v5.14 matrix test.
-  const twinAudit = removeVerticalRectangle7Twins(model, rectangle7, opts);
+  let removedDuplicatePath = null;
+  if (duplicate?.parent) {
+    removedDuplicatePath = pathOf(duplicate);
+    duplicate.parent.remove(duplicate);
+    // Deliberately do NOT dispose geometry/material resources: the accepted
+    // Rectangle_7 and neighbouring instances may share them.
+  }
 
-  // Keep the one accepted Rectangle_7 entirely outside the animated b2a branch.
+  // Preserve the accepted Rectangle_7 exactly where it is in world space, but
+  // remove it from b2a inheritance before the evaluator can make it rise/collapse.
   const heldBeforeMotion = attachToCluster(rectangle7, cluster1, model);
 
-  // Preserve the complete accepted v5.12 chain for every other object.
+  // Run the established accepted calibration/motion chain for everything else.
   const motion = createV512SplineMotion(model, opts);
 
+  // Reassert the acceptance rule after setup and reset.
   attachToCluster(rectangle7, cluster1, model);
 
   const baseReset = motion.reset?.bind(motion);
@@ -200,17 +87,16 @@ export function createSplineMotion(model, opts = {}) {
   }
 
   motion.rectangle7HeldStatic = heldBeforeMotion;
-  motion.rectangle7SourcePath = originalSourcePath;
-  motion.removedRectangle7Twins = twinAudit.removed;
-  motion.rectangle7TwinAudit = twinAudit.audited;
+  motion.removedRectangle7Duplicate = removedDuplicatePath;
+  motion.rectangle7DuplicateExpectedPath = BAD_RECTANGLE_7_DUPLICATE_PATH;
 
   if (opts.debug) {
-    console.group('[ADAM calibration] v5.15 Rectangle_7 cleanup');
-    console.log('base motion source:', V512);
-    console.log('Rectangle_7 source path:', originalSourcePath);
-    console.log('physically removed Rectangle_7 vertical twins:', twinAudit.removed);
-    console.log('retained Rectangle_7 held outside b2a:', heldBeforeMotion);
-    console.log('retained runtime parent:', rectangle7?.parent?.name || '(none)');
+    console.group('[ADAM calibration] v5.16 exact Rectangle_7 cleanup');
+    console.log('accepted Rectangle_7 found:', !!rectangle7);
+    console.log('exact lower duplicate found:', !!duplicate);
+    console.log('physically removed duplicate:', removedDuplicatePath || '(not found)');
+    console.log('accepted Rectangle_7 held outside b2a:', heldBeforeMotion);
+    console.log('accepted runtime parent:', rectangle7?.parent?.name || '(none)');
     console.groupEnd();
   }
 
