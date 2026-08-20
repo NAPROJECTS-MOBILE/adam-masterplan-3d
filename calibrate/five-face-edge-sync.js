@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { LineSegments2 } from 'three/addons/lines/LineSegments2.js';
 import { LineSegmentsGeometry } from 'three/addons/lines/LineSegmentsGeometry.js';
 import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
@@ -8,17 +9,20 @@ import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
   meshes that are styled as normal building faces but intentionally remain out
   of the native solid/glow classification.
 
-  Important: this module does NOT add glow and does NOT change mesh transforms,
-  materials, motion, camera, lighting, keyframes, slab or dots.
+  Critical detail: capture the exact mesh OBJECTS as soon as GLTFLoader returns
+  the GLB, before app-v2/spline motion can re-parent anything. Edge generation
+  then uses those retained references permanently; it never tries to rediscover
+  the targets later from a mutated scene hierarchy.
 */
 
-const TARGETS = [
-  { path:'Scene_1/Main_Group/clusters/cluster_2/Rectangle_2_5', name:'Rectangle_2_5', ancestor:'cluster_2' },
-  { path:'Scene_1/Main_Group/clusters/cluster_2/Rectangle_10',  name:'Rectangle_10',  ancestor:'cluster_2' },
-  { path:'Scene_1/Main_Group/clusters/cluster_2/Rectangle_3_2', name:'Rectangle_3_2', ancestor:'cluster_2' },
-  { path:'Scene_1/Main_Group/clusters/cluster_1/floor',         name:'floor',         ancestor:'cluster_1' },
-  { path:'Scene_1/Main_Group/clusters/cluster_1/b10/Rectangle_9', name:'Rectangle_9', ancestor:'b10' }
+const TARGET_PATHS = [
+  'Scene_1/Main_Group/clusters/cluster_2/Rectangle_2_5',
+  'Scene_1/Main_Group/clusters/cluster_2/Rectangle_10',
+  'Scene_1/Main_Group/clusters/cluster_2/Rectangle_3_2',
+  'Scene_1/Main_Group/clusters/cluster_1/floor',
+  'Scene_1/Main_Group/clusters/cluster_1/b10/Rectangle_9'
 ];
+const TARGET_SET = new Set(TARGET_PATHS);
 
 function pathOf(object) {
   const parts = [];
@@ -29,6 +33,41 @@ function pathOf(object) {
   }
   return parts.reverse().join('/');
 }
+
+let capturedTargets = [];
+let captureDone = false;
+
+function captureExactTargets(root) {
+  const found = new Map();
+  root?.traverse?.(object => {
+    if (!object?.isMesh || !object.geometry?.attributes?.position) return;
+    const path = pathOf(object);
+    if (TARGET_SET.has(path)) found.set(path, object);
+  });
+
+  capturedTargets = TARGET_PATHS
+    .map(path => ({ path, mesh: found.get(path) || null }))
+    .filter(entry => entry.mesh);
+  captureDone = true;
+
+  console.info(`[ADAM five-face edges v3] captured ${capturedTargets.length}/${TARGET_PATHS.length} exact GLB targets before motion`);
+  const missing = TARGET_PATHS.filter(path => !found.has(path));
+  if (missing.length) console.warn('[ADAM five-face edges v3] capture missing:', missing);
+}
+
+// This module is loaded before glow-bootstrap imports app-v2.js. Hook the GLTF
+// load once, retain the original mesh objects, then restore GLTFLoader so no
+// other model loads are affected.
+const originalLoadAsync = GLTFLoader.prototype.loadAsync;
+GLTFLoader.prototype.loadAsync = async function adamCaptureFiveFaceTargets(...args) {
+  try {
+    const gltf = await originalLoadAsync.apply(this, args);
+    captureExactTargets(gltf?.scene);
+    return gltf;
+  } finally {
+    GLTFLoader.prototype.loadAsync = originalLoadAsync;
+  }
+};
 
 function edgeControls() {
   const wraps = [...document.querySelectorAll('#edgeCtls .ctl')];
@@ -60,37 +99,6 @@ function canvasSize() {
   };
 }
 
-function resolveTargets(scene) {
-  const meshes = [];
-  scene.traverse(object => {
-    if (object?.isMesh && object.geometry?.attributes?.position) meshes.push(object);
-  });
-
-  const resolved = [];
-  const used = new Set();
-
-  for (const target of TARGETS) {
-    let mesh = meshes.find(m => !used.has(m) && pathOf(m) === target.path) || null;
-
-    if (!mesh) {
-      const named = meshes.filter(m => !used.has(m) && m.name === target.name);
-      const hinted = named.filter(m => {
-        const path = pathOf(m);
-        return path.includes(`/${target.ancestor}/`) || path.endsWith(`/${target.ancestor}/${target.name}`);
-      });
-      if (hinted.length === 1) mesh = hinted[0];
-      else if (named.length === 1) mesh = named[0];
-    }
-
-    if (mesh) {
-      used.add(mesh);
-      resolved.push({ ...target, mesh });
-    }
-  }
-
-  return resolved;
-}
-
 function makeGeometry(mesh, angle) {
   const edges = new THREE.EdgesGeometry(mesh.geometry, angle);
   const position = edges.attributes.position;
@@ -108,14 +116,16 @@ function makeGeometry(mesh, angle) {
   return geometry;
 }
 
-const material = new LineMaterial({ transparent:true, depthTest:true, depthWrite:true });
+const material = new LineMaterial({
+  transparent:true,
+  depthTest:true,
+  depthWrite:false
+});
 material.toneMapped = false;
 
-let targets = [];
 let lines = [];
-let resolvedScene = null;
 let lastAngle = null;
-let lastSignature = '';
+let lastCapturedIdentity = null;
 
 function clearLines() {
   for (const line of lines) {
@@ -125,58 +135,57 @@ function clearLines() {
   lines = [];
 }
 
-function rebuild(scene, angle) {
-  clearLines();
-  targets = resolveTargets(scene);
+function addLine(mesh, geometry, instanceMatrix = null) {
+  const line = new LineSegments2(geometry.clone(), material);
+  line.userData.adamFiveFaceEdge = true;
+  line.frustumCulled = false;
+  line.renderOrder = 3;
 
-  for (const target of targets) {
+  if (instanceMatrix) {
+    line.matrixAutoUpdate = false;
+    line.matrix.copy(instanceMatrix);
+  }
+
+  mesh.add(line);
+  lines.push(line);
+}
+
+function rebuild(angle) {
+  clearLines();
+  if (!captureDone || !capturedTargets.length) return;
+
+  for (const target of capturedTargets) {
     const mesh = target.mesh;
+    if (!mesh?.parent || !mesh.geometry?.attributes?.position) continue;
+
     const geometry = makeGeometry(mesh, angle);
     if (!geometry) continue;
-
-    const add = instanceMatrix => {
-      const line = new LineSegments2(geometry.clone(), material);
-      line.userData.adamFiveFaceEdge = true;
-      line.frustumCulled = false;
-      line.renderOrder = 3;
-      if (instanceMatrix) {
-        line.matrixAutoUpdate = false;
-        line.matrix.copy(instanceMatrix);
-      }
-      mesh.add(line);
-      lines.push(line);
-    };
 
     if (mesh.isInstancedMesh) {
       const matrix = new THREE.Matrix4();
       for (let i = 0; i < mesh.count; i++) {
         mesh.getMatrixAt(i, matrix);
-        add(matrix.clone());
+        addLine(mesh, geometry, matrix.clone());
       }
     } else {
-      add(null);
+      addLine(mesh, geometry);
     }
 
     geometry.dispose();
   }
 
-  const signature = targets.map(t => `${t.path}=>${pathOf(t.mesh)}`).sort().join('|');
-  if (signature !== lastSignature) {
-    lastSignature = signature;
-    console.info(`[ADAM five-face edges v2] resolved ${targets.length}/${TARGETS.length}; created ${lines.length} edge layer(s)`);
-    const foundPaths = new Set(targets.map(t => t.path));
-    const missing = TARGETS.filter(t => !foundPaths.has(t.path)).map(t => t.path);
-    if (missing.length) console.warn('[ADAM five-face edges v2] unresolved targets:', missing);
-  }
+  console.info(`[ADAM five-face edges v3] created ${lines.length} edge layer(s) from ${capturedTargets.length} retained target(s)`);
 }
 
-function sync(scene) {
-  const controls = edgeControls();
+function sync() {
+  if (!captureDone) return;
 
-  if (scene !== resolvedScene || lastAngle !== controls.angle || !lines.length) {
-    resolvedScene = scene;
+  const controls = edgeControls();
+  const identity = capturedTargets.map(t => t.mesh?.uuid || '').join('|');
+  if (identity !== lastCapturedIdentity || controls.angle !== lastAngle || !lines.length) {
+    lastCapturedIdentity = identity;
     lastAngle = controls.angle;
-    rebuild(scene, controls.angle);
+    rebuild(controls.angle);
   }
 
   material.color.set(controls.color);
@@ -194,9 +203,10 @@ function sync(scene) {
 
 const previousRender = THREE.WebGLRenderer.prototype.render;
 THREE.WebGLRenderer.prototype.render = function render(scene, camera) {
-  sync(scene);
+  sync();
   return previousRender.call(this, scene, camera);
 };
 
-window.__ADAM_FIVE_FACE_EDGE_TARGETS = TARGETS.map(t => t.path);
-window.__ADAM_FIVE_FACE_EDGES = lines;
+window.__ADAM_FIVE_FACE_EDGE_TARGETS = TARGET_PATHS;
+window.__ADAM_FIVE_FACE_EDGE_CAPTURED = () => capturedTargets;
+window.__ADAM_FIVE_FACE_EDGES = () => lines;
