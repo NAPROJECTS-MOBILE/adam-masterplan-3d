@@ -12,7 +12,9 @@ const $ = id => document.getElementById(id);
 const setStatus = s => $('status').textContent = s;
 
 // Four cluster anchors on the Webflow .h-scroll scale.
-// Each frame stores the easing curve used FROM that frame TO the next frame.
+// Each frame stores ONLY camera/reveal/timing information. Materials, lighting,
+// base, edges, glow and dots are scene-global via state.style and therefore
+// remain identical for every keyframe and every point on the scroll timeline.
 const seededFrames = [
   { scrollPct:0,  motionProgress:0,     ease:'easeInOut' },
   { scrollPct:25, motionProgress:0.027, ease:'easeInOut' },
@@ -306,10 +308,18 @@ function applyStyle() {
   renderer.toneMappingExposure = s.exposure;
 
   const tint = tmpColor.set(s.face);
+  const faceLift = Math.max(0, s.faceLift ?? 0);
   for (const m of solids) {
     const o = originals.get(m);
     eachMaterial(m, mat => {
       if (mat.color) mat.color.copy(o.color).lerp(tint, s.faceTint);
+      if (mat.emissive && mat.color) {
+        // Controlled white/colour lift. This is GLOBAL scene styling, not a
+        // per-frame value. 0 = purely physically lit; higher values pull shaded
+        // faces toward the selected face colour without discarding shading.
+        mat.emissive.copy(mat.color);
+        mat.emissiveIntensity = faceLift;
+      }
       if ('roughness' in mat) mat.roughness = s.faceRoughness;
       if ('metalness' in mat) mat.metalness = s.faceMetalness;
       mat.transparent = true;
@@ -386,45 +396,13 @@ const lerp = (a,b,t) => a + (b-a) * t;
 const clamp = (v,a,b) => Math.max(a, Math.min(b, v));
 
 const EASINGS = {
-  linear: {
-    label:'Linear',
-    fn:t => t
-  },
-  easeIn: {
-    label:'Speed up · ease in',
-    fn:t => t * t * t
-  },
-  easeOut: {
-    label:'Slow down · ease out',
-    fn:t => 1 - Math.pow(1 - t, 3)
-  },
-  easeInOut: {
-    label:'Ease in + out',
-    fn:t => t < .5 ? 4*t*t*t : 1 - Math.pow(-2*t+2,3)/2
-  },
-  swingIn: {
-    label:'Swing in',
-    fn:t => {
-      const c1 = 1.70158, c3 = c1 + 1;
-      return c3*t*t*t - c1*t*t;
-    }
-  },
-  swingOut: {
-    label:'Swing out',
-    fn:t => {
-      const c1 = 1.70158, c3 = c1 + 1;
-      return 1 + c3*Math.pow(t - 1, 3) + c1*Math.pow(t - 1, 2);
-    }
-  },
-  swingInOut: {
-    label:'Swing in + out',
-    fn:t => {
-      const c1 = 1.70158, c2 = c1 * 1.525;
-      return t < .5
-        ? (Math.pow(2*t, 2) * ((c2 + 1) * 2*t - c2)) / 2
-        : (Math.pow(2*t - 2, 2) * ((c2 + 1) * (2*t - 2) + c2) + 2) / 2;
-    }
-  }
+  linear: { label:'Linear', fn:t => t },
+  easeIn: { label:'Speed up · ease in', fn:t => t * t * t },
+  easeOut: { label:'Slow down · ease out', fn:t => 1 - Math.pow(1 - t, 3) },
+  easeInOut: { label:'Ease in + out', fn:t => t < .5 ? 4*t*t*t : 1 - Math.pow(-2*t+2,3)/2 },
+  swingIn: { label:'Swing in', fn:t => { const c1=1.70158,c3=c1+1; return c3*t*t*t-c1*t*t; } },
+  swingOut: { label:'Swing out', fn:t => { const c1=1.70158,c3=c1+1; return 1+c3*Math.pow(t-1,3)+c1*Math.pow(t-1,2); } },
+  swingInOut: { label:'Swing in + out', fn:t => { const c1=1.70158,c2=c1*1.525; return t<.5 ? (Math.pow(2*t,2)*((c2+1)*2*t-c2))/2 : (Math.pow(2*t-2,2)*((c2+1)*(2*t-2)+c2)+2)/2; } }
 };
 
 function transitionEase(frame, t) {
@@ -475,10 +453,6 @@ function applyScrollTimeline(scrollPct) {
     panX:lerp(a.panX,b.panX,eased),
     panZ:lerp(a.panZ,b.panZ,eased)
   });
-
-  // Back/swing curves may intentionally overshoot camera values. Clamp the
-  // reveal progress itself to its valid 0–1 interval while following the same
-  // perceived easing curve.
   const motionEase = clamp(eased, 0, 1);
   motion.setProgress(lerp(a.motionProgress ?? 0, b.motionProgress ?? 0, motionEase));
 }
@@ -544,14 +518,12 @@ hosts.forEach(([h,s,g,c]) => build(h,s,g,c));
 
 const kfrow = $('kfrow');
 const scrollKFHost = $('scrollKeyframeCtl');
-
 const scrollKFWrap = document.createElement('div');
 scrollKFWrap.className = 'ctl';
 scrollKFWrap.innerHTML = '<label>Keyframe scroll position<span data-v></span></label>';
 const scrollKFInput = document.createElement('input');
 Object.assign(scrollKFInput, { type:'range', min:0, max:100, step:.1 });
 scrollKFWrap.appendChild(scrollKFInput);
-
 const pctEdit = document.createElement('div');
 pctEdit.className = 'keyframe-pct-edit';
 const scrollKFNumber = document.createElement('input');
@@ -588,10 +560,7 @@ function clampKeyframePct(index, value) {
 }
 
 function setSelectedFramePct(value) {
-  if (!Number.isFinite(value)) {
-    syncUI();
-    return;
-  }
+  if (!Number.isFinite(value)) { syncUI(); return; }
   const next = Number(clampKeyframePct(active, value).toFixed(1));
   state.keyframes[active].scrollPct = next;
   showSelectedFrame();
@@ -601,29 +570,15 @@ function setSelectedFramePct(value) {
 
 scrollKFInput.oninput = () => setSelectedFramePct(parseFloat(scrollKFInput.value));
 scrollKFNumber.onchange = () => setSelectedFramePct(parseFloat(scrollKFNumber.value));
-scrollKFNumber.onkeydown = e => {
-  if (e.key === 'Enter') {
-    e.preventDefault();
-    scrollKFNumber.blur();
-  }
-};
-
-easeSelect.onchange = () => {
-  state.keyframes[active].ease = easeSelect.value;
-  playing = false;
-  syncUI();
-};
+scrollKFNumber.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); scrollKFNumber.blur(); } };
+easeSelect.onchange = () => { state.keyframes[active].ease = easeSelect.value; playing = false; syncUI(); };
 
 function renderKeyframeButtons() {
   kfrow.innerHTML = '';
   state.keyframes.forEach((k,i) => {
     const b = document.createElement('button');
     b.textContent = `${String(i + 1).padStart(2,'0')} · ${Number(k.scrollPct.toFixed(1))}%`;
-    b.onclick = () => {
-      active = i;
-      showSelectedFrame();
-      syncUI();
-    };
+    b.onclick = () => { active = i; showSelectedFrame(); syncUI(); };
     kfrow.appendChild(b);
   });
 }
@@ -631,26 +586,10 @@ function renderKeyframeButtons() {
 $('addKFBtn').onclick = () => {
   const desired = Number(clamp(previewScrollPct, 0, 100).toFixed(1));
   const existing = state.keyframes.findIndex(k => Math.abs(k.scrollPct - desired) < 0.05);
-
-  if (existing >= 0) {
-    active = existing;
-    showSelectedFrame();
-    syncUI();
-    return;
-  }
-
+  if (existing >= 0) { active = existing; showSelectedFrame(); syncUI(); return; }
   let insertAt = state.keyframes.findIndex(k => k.scrollPct > desired);
   if (insertAt < 0) insertAt = state.keyframes.length;
-
-  // New frames start clean at the EXACT top scrubber percentage. Use Copy
-  // previous when you want to inherit the prior camera/reveal pose.
-  const fresh = {
-    ...START_POSE,
-    scrollPct: desired,
-    motionProgress: 0,
-    ease: 'easeInOut'
-  };
-
+  const fresh = { ...START_POSE, scrollPct:desired, motionProgress:0, ease:'easeInOut' };
   state.keyframes.splice(insertAt, 0, fresh);
   active = insertAt;
   showSelectedFrame();
@@ -677,28 +616,14 @@ $('copyPrevBtn').onclick = () => {
 };
 
 $('playBtn').onclick = () => {
-  if (playing) {
-    playing = false;
-  } else {
-    playing = true;
-    playT = 0;
-    previewScrollPct = 0;
-  }
+  if (playing) playing = false;
+  else { playing = true; playT = 0; previewScrollPct = 0; }
   syncUI();
 };
 
-$('scrollScrub').oninput = e => {
-  playing = false;
-  previewScrollPct = parseFloat(e.target.value);
-  syncUI();
-};
-
+$('scrollScrub').oninput = e => { playing = false; previewScrollPct = parseFloat(e.target.value); syncUI(); };
 for (const b of $('quarterJumps').querySelectorAll('[data-pct]')) {
-  b.onclick = () => {
-    playing = false;
-    previewScrollPct = parseFloat(b.dataset.pct);
-    syncUI();
-  };
+  b.onclick = () => { playing = false; previewScrollPct = parseFloat(b.dataset.pct); syncUI(); };
 }
 
 Object.keys(PRESETS).forEach(name => {
@@ -736,7 +661,7 @@ function serialise() {
     `zoom: ${k.zoom.toFixed(2)}, panX: ${k.panX.toFixed(2)}, panZ: ${k.panZ.toFixed(2)}, ` +
     `motionProgress: ${(k.motionProgress ?? 0).toFixed(3)}, ease: '${k.ease || 'easeInOut'}' }`
   ).join(',\n');
-  return `const KEYFRAMES = [\n${K}\n];\n\n// ease is stored on each frame and controls that frame → the next frame.\n// Production: feed 0–100% .h-scroll progress into applyScrollTimeline().\nstyle = ${JSON.stringify(state.style,null,2)};`;
+  return `const KEYFRAMES = [\n${K}\n];\n\n// GLOBAL scene style: materials, lighting, slab, edges, glow and dots are shared by every frame.\nconst STYLE = ${JSON.stringify(state.style,null,2)};`;
 }
 
 $('copyBtn').onclick = async () => {
@@ -790,7 +715,7 @@ function syncUI() {
   setStatus(
     `fuller model · ${solids.length} solid / ${flats.length} flat · forced glow ${forcedGlowResolved.size}/${FORCE_GLOW_PATHS.size}\n` +
     `selected frame ${String(active + 1).padStart(2,'0')} @ ${Number(frame.scrollPct.toFixed(1))}% · transition ${easeDef.label}\n` +
-    `keyframes ${state.keyframes.map(k => Number(k.scrollPct.toFixed(1)) + '%').join(' / ')}\n` +
+    `GLOBAL style · face lift ${Number((state.style.faceLift ?? 0).toFixed(2))} · lighting/materials/dots shared across all frames\n` +
     `Spline reveal mapped: ${mapped || 'none'}\n` +
     `ambient: ${spinning || 'none'}${inert ? ` · inert: ${inert}` : ''}`
   );
@@ -804,31 +729,18 @@ syncUI();
 let lastDot = 0;
 (function loop(now) {
   requestAnimationFrame(loop);
-
   const seconds = now * .001;
   if (motion.hasAmbient) motion.setAmbientTime(seconds);
-
-  if (animateDots && now - lastDot >= 33) {
-    dotUniforms.uTime.value = seconds;
-    lastDot = now;
-  }
-
+  if (animateDots && now - lastDot >= 33) { dotUniforms.uTime.value = seconds; lastDot = now; }
   if (playing) {
     playT += .0022;
-    if (playT >= 1) {
-      playT = 1;
-      playing = false;
-    }
+    if (playT >= 1) { playT = 1; playing = false; }
     previewScrollPct = playT * 100;
     applyScrollTimeline(previewScrollPct);
     if (!playing) syncUI();
-    else {
-      $('scrollScrub').value = previewScrollPct;
-      $('scrollPctReadout').textContent = `${Math.round(previewScrollPct)}%`;
-    }
+    else { $('scrollScrub').value = previewScrollPct; $('scrollPctReadout').textContent = `${Math.round(previewScrollPct)}%`; }
   } else {
     applyScrollTimeline(previewScrollPct);
   }
-
   renderer.render(scene, camera);
 })(0);
