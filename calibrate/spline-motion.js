@@ -1,4 +1,4 @@
-// ADAM calibration motion wrapper — v5.9 + inner-b2 visual hold
+// ADAM calibration motion wrapper — v5.10 + b2 duplicate suppression
 //
 // v5.4 fixes an important timeline sampling bug in the pinned v5.3 core:
 // b2a's first authored key is at Spline t=1.50 with scaleY=0. Before that
@@ -10,12 +10,19 @@
 // v5.8 keeps cluster_1/b12/Rectangle_9_4 at +2 local Y and raises
 // cluster_1/b6/Boolean_9 to +3 local Y.
 //
-// v5.9 fixes the remaining strange Play Through rise on five user-identified
-// inner-b2 meshes. Those meshes are visually static in the accepted model, but
-// because they live below the animated b2/b2a parents they inherit the parent's
-// Y translation / scale reveal. We detach ONLY those five meshes from the
-// animated branch after the core binds its drivers, preserving their world
-// transforms exactly. Their materials/edge/glow treatment remains unchanged.
+// v5.9 holds five user-identified inner-b2 meshes static during Play Through.
+//
+// v5.10 follows the duplicate geometry down into the fuller GLB. Binary
+// inspection proves three of the large held meshes have exact co-located,
+// geometry-identical counterparts in the OUTER b2/b2a branch:
+//   inner b2_1/Rectangle_4                  <-> outer b2/Rectangle_4_1
+//   inner .../Group_4/Rectangle_29          <-> outer .../Group_4_2/Rectangle_29_2
+//   inner .../Group_4_1/Rectangle_29_1      <-> outer .../Group_4_3/Rectangle_29_3
+// Their initial world bounds are identical. Once the inner copy is detached
+// and held static, those outer copies become visible underneath and continue to
+// inherit b2/b2a animation. They are redundant render copies, so v5.10 hides
+// ONLY those three exact counterparts. No broad parent/geometry heuristic is
+// used and the remaining b2/b2a hierarchy is untouched.
 
 export { MOTION_WINDOW, TRACKS, AMBIENT_DRIVERS } from 'https://cdn.jsdelivr.net/gh/NAPROJECTS-MOBILE/adam-masterplan-3d@8de5103d184ab80037f788834abe3d748cc50c99/calibrate/spline-motion.js';
 import { createSplineMotion as createCoreSplineMotion } from 'https://cdn.jsdelivr.net/gh/NAPROJECTS-MOBILE/adam-masterplan-3d@8de5103d184ab80037f788834abe3d748cc50c99/calibrate/spline-motion.js';
@@ -36,7 +43,7 @@ const PAD_PATHS = [
 const FLOOR_PATH = 'Scene_1/Main_Group/clusters/cluster_1/floor';
 const CLUSTER_1_PATH = 'Scene_1/Main_Group/clusters/cluster_1';
 
-// These five are the exact picker targets from the latest visual audit.
+// Exact picker targets that must remain visually static through Play Through.
 // Rectangle_7 is intentionally NOT included here.
 const HOLD_STATIC_PATHS = [
   'Scene_1/Main_Group/clusters/cluster_1/b2/b2_1/Rectangle_4',
@@ -44,6 +51,16 @@ const HOLD_STATIC_PATHS = [
   'Scene_1/Main_Group/clusters/cluster_1/b2/b2_1/b2a/Group_4/Rectangle_29',
   'Scene_1/Main_Group/clusters/cluster_1/b2/b2_1/b2a/Group_4/mesh_51_instance_3',
   'Scene_1/Main_Group/clusters/cluster_1/b2/b2_1/b2a/Group_4/mesh_51_instance_2'
+];
+
+// Exact co-located OUTER-branch copies found by inspecting the GLB binary.
+// These three are not approximations: each counterpart has the same initial
+// world bounding box and identical POSITION/NORMAL/UV/index data as the held
+// inner mesh it duplicates.
+const HIDE_MOVING_DUPLICATE_PATHS = [
+  'Scene_1/Main_Group/clusters/cluster_1/b2/Rectangle_4_1',
+  'Scene_1/Main_Group/clusters/cluster_1/b2/b2a_1/Group_4_2/Rectangle_29_2',
+  'Scene_1/Main_Group/clusters/cluster_1/b2/b2a_1/Group_4_3/Rectangle_29_3'
 ];
 
 const STATIC_Y_OFFSETS = [
@@ -112,8 +129,10 @@ export function createSplineMotion(model, opts = {}) {
     return { path, node, base: captureLocal(node) };
   });
 
-  // Capture the five exact visual-hold targets BEFORE any re-parenting.
+  // Capture visual-hold targets and their exact redundant outer counterparts
+  // BEFORE any re-parenting changes their paths.
   const holdTargets = HOLD_STATIC_PATHS.map(path => ({ path, node: findByPath(model, path) }));
+  const duplicateTargets = HIDE_MOVING_DUPLICATE_PATHS.map(path => ({ path, node: findByPath(model, path) }));
   const cluster1 = findByPath(model, CLUSTER_1_PATH);
 
   // Capture static authored Y values before applying calibration offsets.
@@ -128,6 +147,20 @@ export function createSplineMotion(model, opts = {}) {
   // the animated b2/b2a parents, so moving selected children out afterward does
   // not disturb the driver bindings.
   const motion = createCoreSplineMotion(model, opts);
+
+  // The outer copies are completely redundant at the accepted static pose.
+  // Hide them rather than detach them: this keeps the Spline parent hierarchy
+  // intact while preventing a second copy from emerging beneath the held mesh.
+  const hiddenDuplicates = [];
+  for (const item of duplicateTargets) {
+    if (!item.node) {
+      if (opts.debug) console.warn('[ADAM calibration] moving duplicate not found:', item.path);
+      continue;
+    }
+    item.node.visible = false;
+    item.node.traverse(child => { child.visible = false; });
+    hiddenDuplicates.push(item.path);
+  }
 
   // Freeze ONLY the five accepted static meshes against b2/b2a Play Through.
   // Object3D.attach preserves each mesh's current WORLD transform while moving
@@ -205,6 +238,9 @@ export function createSplineMotion(model, opts = {}) {
       coreReset();
       if (boolean12) nudgeY(boolean12, BLOCK_UP);
       applyStaticOffsets();
+      // Core reset does not change visibility, but make the acceptance rule
+      // explicit so future changes cannot accidentally revive these copies.
+      for (const { node } of duplicateTargets) if (node) node.visible = false;
       model.updateMatrixWorld(true);
     };
   }
@@ -214,8 +250,9 @@ export function createSplineMotion(model, opts = {}) {
   model.updateMatrixWorld(true);
 
   if (opts.debug) {
-    console.group('[ADAM calibration] v5.9 fixes');
+    console.group('[ADAM calibration] v5.10 fixes');
     console.log('held static through Play Through:', heldStatic);
+    console.log('hidden exact moving duplicates:', hiddenDuplicates);
     console.log('b2a pre-key base preserved until Spline t=1.50:',
       b2aPreKey.map(x => ({ path: x.path, found: !!x.node })));
     console.log('pads Y', PAD_DOWN, PAD_PATHS);
