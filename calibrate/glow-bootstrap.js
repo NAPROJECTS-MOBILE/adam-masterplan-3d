@@ -49,7 +49,7 @@ THREE.Box3.prototype.getSize = function(target) {
 };
 
 try {
-  await import('./app-v2.js?v=keyframe-direct-edit-20260820-1343');
+  await import('./app-v2.js?v=keyframe-easing-typed-percent-20260820-1431');
 } finally {
   THREE.Box3.prototype.setFromObject = originalSetFromObject;
   THREE.Box3.prototype.getSize = originalGetSize;
