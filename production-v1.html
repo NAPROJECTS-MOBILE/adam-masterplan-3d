@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>ADAM Masterplan — Production V1.1</title>
+  <title>ADAM Masterplan — Production V1.2</title>
   <style>
     html,body{margin:0;background:#f7f7f2;font-family:Arial,sans-serif;color:#111}
     .intro,.outro{height:70vh;display:grid;place-items:center;padding:2rem;text-align:center}
@@ -24,7 +24,7 @@
   </script>
 </head>
 <body>
-  <section class="intro"><div><h1>ADAM Masterplan Production V1.1</h1><p>Scroll into the test section. The 3D reads the actual <code>.h-scroll</code> progress.</p></div></section>
+  <section class="intro"><div><h1>ADAM Masterplan Production V1.2</h1><p>Scroll into the test section. The 3D reads the actual <code>.h-scroll</code> progress and restores the calibrated moving block drivers.</p></div></section>
 
   <section class="h-scroll">
     <div class="h-scroll-scene">
@@ -35,7 +35,7 @@
   <section class="outro"><h2>100%</h2></section>
   <div class="meter" id="meter">0.0%</div>
 
-  <script type="module" src="./production/adam-masterplan-v1.1.js?v=1.1.0"></script>
+  <script type="module" src="./production/adam-masterplan-v1.2.js?v=1.2.0"></script>
   <script>
     const meter=document.getElementById('meter');
     const update=()=>{const el=document.querySelector('[data-adam-masterplan-v1]');meter.textContent=(el?.dataset.scrollPct||'0.0')+'%';requestAnimationFrame(update)};
