@@ -12,14 +12,12 @@ const $ = id => document.getElementById(id);
 const setStatus = s => $('status').textContent = s;
 
 // Four cluster anchors on the Webflow .h-scroll scale.
-// 0–25, 25–50 and 50–75 interpolate; 75–100 holds cluster 4 unless another
-// keyframe is inserted. Camera values start identical so the user can calibrate
-// each cluster pose explicitly.
+// Each frame stores the easing curve used FROM that frame TO the next frame.
 const seededFrames = [
-  { scrollPct:0,  motionProgress:0 },
-  { scrollPct:25, motionProgress:0.027 },
-  { scrollPct:50, motionProgress:0.667 },
-  { scrollPct:75, motionProgress:1 }
+  { scrollPct:0,  motionProgress:0,     ease:'easeInOut' },
+  { scrollPct:25, motionProgress:0.027, ease:'easeInOut' },
+  { scrollPct:50, motionProgress:0.667, ease:'easeInOut' },
+  { scrollPct:75, motionProgress:1,     ease:'easeInOut' }
 ];
 const state = {
   keyframes: seededFrames.map(k => ({ ...START_POSE, ...k })),
@@ -386,7 +384,52 @@ resize();
 const look = new THREE.Vector3();
 const lerp = (a,b,t) => a + (b-a) * t;
 const clamp = (v,a,b) => Math.max(a, Math.min(b, v));
-const camEase = t => t < .5 ? 4*t*t*t : 1 - Math.pow(-2*t+2,3)/2;
+
+const EASINGS = {
+  linear: {
+    label:'Linear',
+    fn:t => t
+  },
+  easeIn: {
+    label:'Speed up · ease in',
+    fn:t => t * t * t
+  },
+  easeOut: {
+    label:'Slow down · ease out',
+    fn:t => 1 - Math.pow(1 - t, 3)
+  },
+  easeInOut: {
+    label:'Ease in + out',
+    fn:t => t < .5 ? 4*t*t*t : 1 - Math.pow(-2*t+2,3)/2
+  },
+  swingIn: {
+    label:'Swing in',
+    fn:t => {
+      const c1 = 1.70158, c3 = c1 + 1;
+      return c3*t*t*t - c1*t*t;
+    }
+  },
+  swingOut: {
+    label:'Swing out',
+    fn:t => {
+      const c1 = 1.70158, c3 = c1 + 1;
+      return 1 + c3*Math.pow(t - 1, 3) + c1*Math.pow(t - 1, 2);
+    }
+  },
+  swingInOut: {
+    label:'Swing in + out',
+    fn:t => {
+      const c1 = 1.70158, c2 = c1 * 1.525;
+      return t < .5
+        ? (Math.pow(2*t, 2) * ((c2 + 1) * 2*t - c2)) / 2
+        : (Math.pow(2*t - 2, 2) * ((c2 + 1) * (2*t - 2) + c2) + 2) / 2;
+    }
+  }
+};
+
+function transitionEase(frame, t) {
+  return (EASINGS[frame?.ease] || EASINGS.easeInOut).fn(clamp(t, 0, 1));
+}
 
 function poseAt(k) {
   const az = k.azimuth * Math.PI / 180;
@@ -423,16 +466,21 @@ function applyScrollTimeline(scrollPct) {
   const a = K[i], b = K[i + 1];
   const span = Math.max(0.0001, b.scrollPct - a.scrollPct);
   const raw = clamp((pct - a.scrollPct) / span, 0, 1);
-  const f = camEase(raw);
+  const eased = transitionEase(a, raw);
 
   poseAt({
-    azimuth:lerp(a.azimuth,b.azimuth,f),
-    elevation:lerp(a.elevation,b.elevation,f),
-    zoom:lerp(a.zoom,b.zoom,f),
-    panX:lerp(a.panX,b.panX,f),
-    panZ:lerp(a.panZ,b.panZ,f)
+    azimuth:lerp(a.azimuth,b.azimuth,eased),
+    elevation:lerp(a.elevation,b.elevation,eased),
+    zoom:lerp(a.zoom,b.zoom,eased),
+    panX:lerp(a.panX,b.panX,eased),
+    panZ:lerp(a.panZ,b.panZ,eased)
   });
-  motion.setProgress(lerp(a.motionProgress ?? 0, b.motionProgress ?? 0, raw));
+
+  // Back/swing curves may intentionally overshoot camera values. Clamp the
+  // reveal progress itself to its valid 0–1 interval while following the same
+  // perceived easing curve.
+  const motionEase = clamp(eased, 0, 1);
+  motion.setProgress(lerp(a.motionProgress ?? 0, b.motionProgress ?? 0, motionEase));
 }
 
 function showSelectedFrame() {
@@ -496,13 +544,42 @@ hosts.forEach(([h,s,g,c]) => build(h,s,g,c));
 
 const kfrow = $('kfrow');
 const scrollKFHost = $('scrollKeyframeCtl');
+
 const scrollKFWrap = document.createElement('div');
 scrollKFWrap.className = 'ctl';
 scrollKFWrap.innerHTML = '<label>Keyframe scroll position<span data-v></span></label>';
 const scrollKFInput = document.createElement('input');
 Object.assign(scrollKFInput, { type:'range', min:0, max:100, step:.1 });
 scrollKFWrap.appendChild(scrollKFInput);
+
+const pctEdit = document.createElement('div');
+pctEdit.className = 'keyframe-pct-edit';
+const scrollKFNumber = document.createElement('input');
+Object.assign(scrollKFNumber, { type:'number', min:0, max:100, step:.1, inputMode:'decimal' });
+scrollKFNumber.className = 'keyframe-pct-number';
+const pctSuffix = document.createElement('span');
+pctSuffix.textContent = '%';
+pctEdit.append(scrollKFNumber, pctSuffix);
+scrollKFWrap.appendChild(pctEdit);
 scrollKFHost.appendChild(scrollKFWrap);
+
+const easeWrap = document.createElement('div');
+easeWrap.className = 'ctl';
+easeWrap.innerHTML = '<label>Transition from this frame → next<span data-v></span></label>';
+const easeSelect = document.createElement('select');
+easeSelect.className = 'keyframe-ease';
+for (const [value, def] of Object.entries(EASINGS)) {
+  const option = document.createElement('option');
+  option.value = value;
+  option.textContent = def.label;
+  easeSelect.appendChild(option);
+}
+easeWrap.appendChild(easeSelect);
+const easeHint = document.createElement('div');
+easeHint.className = 'ctl-hint';
+easeHint.textContent = 'Controls the movement curve from the selected frame into the next timestamp.';
+easeWrap.appendChild(easeHint);
+scrollKFHost.appendChild(easeWrap);
 
 function clampKeyframePct(index, value) {
   const prev = index > 0 ? state.keyframes[index - 1].scrollPct + 0.1 : 0;
@@ -510,11 +587,30 @@ function clampKeyframePct(index, value) {
   return clamp(value, prev, next);
 }
 
-scrollKFInput.oninput = () => {
-  const next = clampKeyframePct(active, parseFloat(scrollKFInput.value));
+function setSelectedFramePct(value) {
+  if (!Number.isFinite(value)) {
+    syncUI();
+    return;
+  }
+  const next = Number(clampKeyframePct(active, value).toFixed(1));
   state.keyframes[active].scrollPct = next;
   showSelectedFrame();
   renderKeyframeButtons();
+  syncUI();
+}
+
+scrollKFInput.oninput = () => setSelectedFramePct(parseFloat(scrollKFInput.value));
+scrollKFNumber.onchange = () => setSelectedFramePct(parseFloat(scrollKFNumber.value));
+scrollKFNumber.onkeydown = e => {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    scrollKFNumber.blur();
+  }
+};
+
+easeSelect.onchange = () => {
+  state.keyframes[active].ease = easeSelect.value;
+  playing = false;
   syncUI();
 };
 
@@ -533,27 +629,26 @@ function renderKeyframeButtons() {
 }
 
 $('addKFBtn').onclick = () => {
-  const current = state.keyframes[active];
-  const next = state.keyframes[active + 1];
-  let insertAt = active + 1;
-  let pct;
+  const desired = Number(clamp(previewScrollPct, 0, 100).toFixed(1));
+  const existing = state.keyframes.findIndex(k => Math.abs(k.scrollPct - desired) < 0.05);
 
-  if (next) {
-    pct = (current.scrollPct + next.scrollPct) / 2;
-  } else if (current.scrollPct < 100) {
-    pct = (current.scrollPct + 100) / 2;
-  } else {
-    const prev = state.keyframes[active - 1];
-    pct = prev ? (prev.scrollPct + current.scrollPct) / 2 : 50;
-    insertAt = active;
+  if (existing >= 0) {
+    active = existing;
+    showSelectedFrame();
+    syncUI();
+    return;
   }
 
-  // New keyframes intentionally start clean. Use Copy previous when you want
-  // the prior camera/reveal pose as the starting point for this new timestamp.
+  let insertAt = state.keyframes.findIndex(k => k.scrollPct > desired);
+  if (insertAt < 0) insertAt = state.keyframes.length;
+
+  // New frames start clean at the EXACT top scrubber percentage. Use Copy
+  // previous when you want to inherit the prior camera/reveal pose.
   const fresh = {
     ...START_POSE,
-    scrollPct: Number(pct.toFixed(1)),
-    motionProgress: 0
+    scrollPct: desired,
+    motionProgress: 0,
+    ease: 'easeInOut'
   };
 
   state.keyframes.splice(insertAt, 0, fresh);
@@ -639,9 +734,9 @@ function serialise() {
     `  // ${String(i + 1).padStart(2,'0')} @ ${Number(k.scrollPct.toFixed(1))}% of .h-scroll\n` +
     `  { scrollPct: ${Number(k.scrollPct.toFixed(1))}, azimuth: ${k.azimuth.toFixed(0)}, elevation: ${k.elevation.toFixed(0)}, ` +
     `zoom: ${k.zoom.toFixed(2)}, panX: ${k.panX.toFixed(2)}, panZ: ${k.panZ.toFixed(2)}, ` +
-    `motionProgress: ${(k.motionProgress ?? 0).toFixed(3)} }`
+    `motionProgress: ${(k.motionProgress ?? 0).toFixed(3)}, ease: '${k.ease || 'easeInOut'}' }`
   ).join(',\n');
-  return `const KEYFRAMES = [\n${K}\n];\n\n// Production: feed 0–100% .h-scroll progress into applyScrollTimeline().\nstyle = ${JSON.stringify(state.style,null,2)};`;
+  return `const KEYFRAMES = [\n${K}\n];\n\n// ease is stored on each frame and controls that frame → the next frame.\n// Production: feed 0–100% .h-scroll progress into applyScrollTimeline().\nstyle = ${JSON.stringify(state.style,null,2)};`;
 }
 
 $('copyBtn').onclick = async () => {
@@ -672,8 +767,15 @@ function syncUI() {
     }
   }
 
-  scrollKFInput.value = state.keyframes[active].scrollPct;
-  scrollKFWrap.querySelector('[data-v]').textContent = `${Number(state.keyframes[active].scrollPct.toFixed(1))}%`;
+  const frame = state.keyframes[active];
+  const easeKey = frame.ease || 'easeInOut';
+  const easeDef = EASINGS[easeKey] || EASINGS.easeInOut;
+  scrollKFInput.value = frame.scrollPct;
+  scrollKFNumber.value = Number(frame.scrollPct.toFixed(1));
+  scrollKFWrap.querySelector('[data-v]').textContent = `${Number(frame.scrollPct.toFixed(1))}%`;
+  easeSelect.value = easeKey;
+  easeWrap.querySelector('[data-v]').textContent = easeDef.label;
+
   $('scrollScrub').value = previewScrollPct;
   $('scrollPctReadout').textContent = `${Number(previewScrollPct.toFixed(1))}%`;
   $('playBtn').textContent = playing ? '❚❚ Pause' : '▶ Play 0–100%';
@@ -687,7 +789,7 @@ function syncUI() {
   const inert = motion.inert.map(i => i.key).join(', ');
   setStatus(
     `fuller model · ${solids.length} solid / ${flats.length} flat · forced glow ${forcedGlowResolved.size}/${FORCE_GLOW_PATHS.size}\n` +
-    `selected frame ${String(active + 1).padStart(2,'0')} @ ${Number(state.keyframes[active].scrollPct.toFixed(1))}% · scroll preview ${Number(previewScrollPct.toFixed(1))}%\n` +
+    `selected frame ${String(active + 1).padStart(2,'0')} @ ${Number(frame.scrollPct.toFixed(1))}% · transition ${easeDef.label}\n` +
     `keyframes ${state.keyframes.map(k => Number(k.scrollPct.toFixed(1)) + '%').join(' / ')}\n` +
     `Spline reveal mapped: ${mapped || 'none'}\n` +
     `ambient: ${spinning || 'none'}${inert ? ` · inert: ${inert}` : ''}`
