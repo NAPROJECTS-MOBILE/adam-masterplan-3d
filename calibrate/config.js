@@ -4,7 +4,7 @@ export const FLAT_THRESHOLD = 0.1;
 export const PRESETS = {
   'Official Light': {
     background:'#f7f7f2',
-    face:'#f6f6f0', faceTint:0.65, faceOpacity:0.88, faceRoughness:0.97, faceMetalness:0.0,
+    face:'#f6f6f0', faceTint:1.0, faceOpacity:0.88, faceRoughness:0.97, faceMetalness:0.0,
     slab:'#f2f3ee', slabOpacity:0.95, slabRoughness:1.0,
     edge:'#d6e296', edgeOpacity:0.52, edgeWidth:1.0, edgeAngle:30,
     glow:'#d9ef8e', glowOpacity:0.22, glowWidth:3.0, glowStrength:1.0, glowExpansion:0.0,
@@ -16,7 +16,7 @@ export const PRESETS = {
   },
   'Soft Lime': {
     background:'#f4f6ea',
-    face:'#eef3dd', faceTint:0.8, faceOpacity:0.82, faceRoughness:0.95, faceMetalness:0.0,
+    face:'#eef3dd', faceTint:1.0, faceOpacity:0.82, faceRoughness:0.95, faceMetalness:0.0,
     slab:'#eceee2', slabOpacity:0.9, slabRoughness:1.0,
     edge:'#b9d24a', edgeOpacity:0.66, edgeWidth:1.4, edgeAngle:30,
     glow:'#c8f542', glowOpacity:0.34, glowWidth:5.0, glowStrength:1.3, glowExpansion:0.002,
@@ -28,7 +28,7 @@ export const PRESETS = {
   },
   'Mono Soft': {
     background:'#eeeeee',
-    face:'#ffffff', faceTint:0.4, faceOpacity:0.9, faceRoughness:1.0, faceMetalness:0.0,
+    face:'#ffffff', faceTint:1.0, faceOpacity:0.9, faceRoughness:1.0, faceMetalness:0.0,
     slab:'#e4e4e4', slabOpacity:1.0, slabRoughness:1.0,
     edge:'#9a9a9a', edgeOpacity:0.5, edgeWidth:1.0, edgeAngle:30,
     glow:'#cfcfcf', glowOpacity:0.18, glowWidth:3.0, glowStrength:0.8, glowExpansion:0.0,
@@ -40,7 +40,7 @@ export const PRESETS = {
   },
   'Dark Studio': {
     background:'#14161a',
-    face:'#dfe4e8', faceTint:0.55, faceOpacity:0.78, faceRoughness:0.9, faceMetalness:0.05,
+    face:'#dfe4e8', faceTint:1.0, faceOpacity:0.78, faceRoughness:0.9, faceMetalness:0.05,
     slab:'#20242a', slabOpacity:1.0, slabRoughness:1.0,
     edge:'#c8f542', edgeOpacity:0.75, edgeWidth:1.2, edgeAngle:30,
     glow:'#c8f542', glowOpacity:0.4, glowWidth:6.0, glowStrength:1.6, glowExpansion:0.003,
@@ -65,7 +65,7 @@ export const LIGHT = [
   ['keyTint','Key-light colour','color']
 ];
 export const FACE = [
-  ['face','Face colour','color'], ['faceTint','Face tint strength',0,1,0.01],
+  ['face','Face colour','color'], ['faceTint','Face colour strength (1 = exact)',0,1,0.01],
   ['faceOpacity','Face opacity',0.05,1,0.01], ['faceRoughness','Face roughness',0,1,0.01],
   ['faceMetalness','Face metalness',0,0.3,0.01]
 ];
@@ -84,7 +84,7 @@ export const GLOW = [
 ];
 export const DOTS = [
   ['dotColor','Dot colour','color'],
-  ['dotDensity','Dot density / count',0.15,5,0.05],
+  ['dotDensity','Dot density / count',0.15,25,0.1],
   ['dotSize','Dot size',0.005,0.25,0.0025],
   ['dotEdgeSoftness','Dot edge softness',0.001,0.15,0.001],
   ['dotSkew','Dot skew',0,1.2,0.01],
