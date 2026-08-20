@@ -435,6 +435,15 @@ function applyScrollTimeline(scrollPct) {
   motion.setProgress(lerp(a.motionProgress ?? 0, b.motionProgress ?? 0, raw));
 }
 
+function showSelectedFrame() {
+  playing = false;
+  const frame = state.keyframes[active];
+  if (!frame) return;
+  previewScrollPct = frame.scrollPct;
+  poseAt(frame);
+  motion.setProgress(frame.motionProgress ?? 0);
+}
+
 /* ---------------------------------------------------------------- controls */
 function build(host, specs, get, onChange) {
   host.innerHTML = '';
@@ -470,7 +479,7 @@ const getKF = () => state.keyframes[active];
 const getStyle = () => state.style;
 const onStyle = () => applyStyle();
 const onEdge = () => { rebuildEdges(state.style.edgeAngle); applyStyle(); };
-const onKeyframeEdit = () => { previewScrollPct = getKF().scrollPct; playing = false; };
+const onKeyframeEdit = () => showSelectedFrame();
 const MOTION = [['motionProgress','Spline reveal progress',0,1,.001]];
 
 const hosts = [
@@ -504,8 +513,7 @@ function clampKeyframePct(index, value) {
 scrollKFInput.oninput = () => {
   const next = clampKeyframePct(active, parseFloat(scrollKFInput.value));
   state.keyframes[active].scrollPct = next;
-  previewScrollPct = next;
-  playing = false;
+  showSelectedFrame();
   renderKeyframeButtons();
   syncUI();
 };
@@ -517,8 +525,7 @@ function renderKeyframeButtons() {
     b.textContent = `${String(i + 1).padStart(2,'0')} · ${Number(k.scrollPct.toFixed(1))}%`;
     b.onclick = () => {
       active = i;
-      playing = false;
-      previewScrollPct = k.scrollPct;
+      showSelectedFrame();
       syncUI();
     };
     kfrow.appendChild(b);
@@ -526,28 +533,41 @@ function renderKeyframeButtons() {
 }
 
 $('addKFBtn').onclick = () => {
-  const source = { ...state.keyframes[active] };
+  const current = state.keyframes[active];
   const next = state.keyframes[active + 1];
+  let insertAt = active + 1;
   let pct;
-  if (next) pct = (source.scrollPct + next.scrollPct) / 2;
-  else if (source.scrollPct < 100) pct = (source.scrollPct + 100) / 2;
-  else pct = Math.max(0, source.scrollPct - 1);
 
-  source.scrollPct = Number(pct.toFixed(1));
-  state.keyframes.splice(active + 1, 0, source);
-  active += 1;
-  previewScrollPct = source.scrollPct;
-  playing = false;
+  if (next) {
+    pct = (current.scrollPct + next.scrollPct) / 2;
+  } else if (current.scrollPct < 100) {
+    pct = (current.scrollPct + 100) / 2;
+  } else {
+    const prev = state.keyframes[active - 1];
+    pct = prev ? (prev.scrollPct + current.scrollPct) / 2 : 50;
+    insertAt = active;
+  }
+
+  // New keyframes intentionally start clean. Use Copy previous when you want
+  // the prior camera/reveal pose as the starting point for this new timestamp.
+  const fresh = {
+    ...START_POSE,
+    scrollPct: Number(pct.toFixed(1)),
+    motionProgress: 0
+  };
+
+  state.keyframes.splice(insertAt, 0, fresh);
+  active = insertAt;
+  showSelectedFrame();
   renderKeyframeButtons();
   syncUI();
 };
 
 $('deleteKFBtn').onclick = () => {
-  if (state.keyframes.length <= 2) return;
+  if (state.keyframes.length <= 1) return;
   state.keyframes.splice(active, 1);
   active = Math.max(0, Math.min(active, state.keyframes.length - 1));
-  previewScrollPct = state.keyframes[active].scrollPct;
-  playing = false;
+  showSelectedFrame();
   renderKeyframeButtons();
   syncUI();
 };
@@ -556,7 +576,7 @@ $('copyPrevBtn').onclick = () => {
   if (active > 0) {
     const pct = state.keyframes[active].scrollPct;
     state.keyframes[active] = { ...state.keyframes[active - 1], scrollPct:pct };
-    previewScrollPct = pct;
+    showSelectedFrame();
     syncUI();
   }
 };
@@ -639,7 +659,7 @@ $('resetBtn').onclick = () => {
 function syncUI() {
   [...kfrow.children].forEach((b,i) => b.classList.toggle('on', i === active && !playing));
   $('copyPrevBtn').disabled = active === 0;
-  $('deleteKFBtn').disabled = state.keyframes.length <= 2;
+  $('deleteKFBtn').disabled = state.keyframes.length <= 1;
 
   for (const [host] of hosts) {
     for (const wrap of host.children) {
@@ -667,7 +687,8 @@ function syncUI() {
   const inert = motion.inert.map(i => i.key).join(', ');
   setStatus(
     `fuller model · ${solids.length} solid / ${flats.length} flat · forced glow ${forcedGlowResolved.size}/${FORCE_GLOW_PATHS.size}\n` +
-    `scroll preview ${Number(previewScrollPct.toFixed(1))}% · keyframes ${state.keyframes.map(k => Number(k.scrollPct.toFixed(1)) + '%').join(' / ')}\n` +
+    `selected frame ${String(active + 1).padStart(2,'0')} @ ${Number(state.keyframes[active].scrollPct.toFixed(1))}% · scroll preview ${Number(previewScrollPct.toFixed(1))}%\n` +
+    `keyframes ${state.keyframes.map(k => Number(k.scrollPct.toFixed(1)) + '%').join(' / ')}\n` +
     `Spline reveal mapped: ${mapped || 'none'}\n` +
     `ambient: ${spinning || 'none'}${inert ? ` · inert: ${inert}` : ''}`
   );
@@ -675,6 +696,7 @@ function syncUI() {
 
 renderKeyframeButtons();
 applyStyle();
+showSelectedFrame();
 syncUI();
 
 let lastDot = 0;
