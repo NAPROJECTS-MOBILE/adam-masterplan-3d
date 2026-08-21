@@ -1,25 +1,40 @@
 import * as THREE from 'three';
 import { FORCE_GLOW_PATHS } from './glow-targets.js?v=72-strip-glow-20260821-0048';
 
-/* ADAM explicit native classification bootstrap */
-const FORCE_MIN_Y = 0.100001;
-const FORCE_TAG = Symbol('adam-force-native-classification');
-const matched = new Set();
+/*
+  ADAM native classification bootstrap
+  ------------------------------------
+  The foreground ribbons are NOT cluster meshes. They live under:
 
-// These two roof bars are re-parented later by spline-motion.js. Force them
-// through the app's NATIVE solid/edge/glow classification here, before any
-// motion code runs, so their glow is guaranteed to be built from the same
-// edgeMat/glowMat pipeline as the rest of the architecture.
+    Scene_1/Main_Group/paths/**
+
+  app-v2 classifies meshes as architectural solids when their measured world Y
+  height is >= FLAT_THRESHOLD. The path ribbons are only a few thousandths high,
+  so they were falling into `flats` / `pathMeshes` and never entering app-v2's
+  proven native edge + glow builder.
+
+  This bootstrap now promotes the real Main_Group/paths meshes through that same
+  native builder. It also prevents those wide paths from changing contentBox, so
+  camera framing/keyframes remain based on the architecture exactly as before.
+*/
+
+const FORCE_MIN_Y = 0.100001;
+const PATH_PREFIX = 'Scene_1/Main_Group/paths/';
+const FORCE_TAG = Symbol('adam-force-native-classification');
+const PATH_TAG = Symbol('adam-native-path-strip');
+const matched = new Set();
+const matchedPathStrips = new Set();
+
+// These two roof bars are re-parented later by spline-motion.js. Keep the
+// historical safeguard so they still enter app-v2's native line builder.
 const STATIC_ROOF_GLOW_PATHS = new Set([
   'Scene_1/Main_Group/clusters/cluster_1/b2/b2_1/b2a/Group_4/Rectangle_6',
   'Scene_1/Main_Group/clusters/cluster_1/b2/b2_1/b2a/Group_4/mesh_50_instance_2'
 ]);
 
-// These five thin architectural meshes are now also included in
-// FORCE_GLOW_PATHS. Keep this set as an explicit classification safeguard so
-// they are guaranteed to enter app-v2's native solid edge+glow builder even
-// when their measured world-space height is below FLAT_THRESHOLD.
-const NATIVE_EDGE_ONLY_PATHS = new Set([
+// Historical five thin cluster meshes. These are not the foreground ribbons,
+// but retaining their classification preserves previous architectural fixes.
+const CRITICAL_THIN_CLUSTER_PATHS = new Set([
   'Scene_1/Main_Group/clusters/cluster_2/Rectangle_2_5',
   'Scene_1/Main_Group/clusters/cluster_2/Rectangle_10',
   'Scene_1/Main_Group/clusters/cluster_2/Rectangle_3_2',
@@ -30,7 +45,7 @@ const NATIVE_EDGE_ONLY_PATHS = new Set([
 const FORCE_CLASSIFY_PATHS = new Set([
   ...FORCE_GLOW_PATHS,
   ...STATIC_ROOF_GLOW_PATHS,
-  ...NATIVE_EDGE_ONLY_PATHS
+  ...CRITICAL_THIN_CLUSTER_PATHS
 ]);
 
 function pathOf(object) {
@@ -45,13 +60,20 @@ function pathOf(object) {
 
 const originalSetFromObject = THREE.Box3.prototype.setFromObject;
 const originalGetSize = THREE.Box3.prototype.getSize;
+const originalUnion = THREE.Box3.prototype.union;
 
 THREE.Box3.prototype.setFromObject = function(object, precise) {
   const result = originalSetFromObject.call(this, object, precise);
   const path = object?.isMesh ? pathOf(object) : '';
-  const force = !!path && FORCE_CLASSIFY_PATHS.has(path);
+  const isPathStrip = !!path && path.startsWith(PATH_PREFIX);
+  const force = isPathStrip || (!!path && FORCE_CLASSIFY_PATHS.has(path));
+
   this[FORCE_TAG] = force;
-  if (force) matched.add(path);
+  this[PATH_TAG] = isPathStrip;
+
+  if (isPathStrip) matchedPathStrips.add(path);
+  else if (force) matched.add(path);
+
   return result;
 };
 
@@ -61,22 +83,37 @@ THREE.Box3.prototype.getSize = function(target) {
   return result;
 };
 
+// app-v2 calls `contentBox.union(b)` for anything classified as a solid. The
+// paths are much wider than the architectural content and must NOT silently
+// alter the calibrated camera framing. Ignore only Box3 instances produced from
+// Main_Group/paths meshes while this bootstrap is active.
+THREE.Box3.prototype.union = function(box) {
+  if (box?.[PATH_TAG]) return this;
+  return originalUnion.call(this, box);
+};
+
 try {
-  await import('./app-v2.js?v=strip-native-glow-20260821-0048');
+  await import('./app-v2.js?v=paths-native-glow-20260821-1320');
 } finally {
   THREE.Box3.prototype.setFromObject = originalSetFromObject;
   THREE.Box3.prototype.getSize = originalGetSize;
+  THREE.Box3.prototype.union = originalUnion;
 
   console.info(
-    `[ADAM native classification] ${matched.size}/${FORCE_CLASSIFY_PATHS.size} explicit paths ` +
-    'were forced through the normal building solid/edge/glow pipeline.'
+    `[ADAM native classification] ${matched.size}/${FORCE_CLASSIFY_PATHS.size} explicit architectural paths ` +
+    'were forced through the normal solid/edge/glow pipeline.'
   );
 
   const missing = [...FORCE_CLASSIFY_PATHS].filter(path => !matched.has(path));
-  if (missing.length) console.warn('[ADAM native classification] unresolved forced paths:', missing);
+  if (missing.length) console.warn('[ADAM native classification] unresolved explicit paths:', missing);
 
-  const stripResolved = [...NATIVE_EDGE_ONLY_PATHS].filter(path => matched.has(path));
-  console.info(`[ADAM five-face native edge+glow] classification ${stripResolved.length}/5`);
+  console.info(
+    `[ADAM native path strips] ${matchedPathStrips.size} Main_Group/paths mesh(es) ` +
+    'promoted into app-v2 native edge+glow; excluded from camera contentBox.'
+  );
+
+  const thinResolved = [...CRITICAL_THIN_CLUSTER_PATHS].filter(path => matched.has(path));
+  console.info(`[ADAM five-face native edge+glow] classification ${thinResolved.length}/5`);
 
   const roofResolved = [...STATIC_ROOF_GLOW_PATHS].filter(path => matched.has(path));
   console.info(`[ADAM roof glow] native classification ${roofResolved.length}/2`);
