@@ -5,30 +5,17 @@ import * as THREE from 'three';
   depth, camera, motion, or production styling.
 
   The scene itself is not an interactive picking surface in this calibrator, so
-  stop asking the user to click it. Identification is now PANEL-ONLY:
-
-    - Prev / Next cycle likely spur candidates (shared-geometry path groups)
-    - Mode toggles between likely spurs and all 39 ribbons
-    - a DOM marker + label is projected over the selected ribbon's world centre
-    - the underlying WebGL scene is left untouched
+  identification is PANEL-ONLY. This module now reads renderer/camera state from
+  an EARLY hook loaded before app boot, rather than wrapping renderer.render late
+  and hoping to stay in the active render chain.
 */
 
-let lastRenderer = null;
-let lastCamera = null;
 let selectedPath = null;
 let selectedIndex = -1;
 let mode = 'likely';
 let marker = null;
 let markerLabel = null;
 let uiInstalled = false;
-
-const previousRender = THREE.WebGLRenderer.prototype.render;
-THREE.WebGLRenderer.prototype.render = function adamPanelPathProbeRender(scene, camera) {
-  lastRenderer = this;
-  lastCamera = camera;
-  updateMarker();
-  return previousRender.call(this, scene, camera);
-};
 
 function shortPath(path) {
   return String(path || '').replace('Scene_1/Main_Group/paths/', '');
@@ -40,6 +27,10 @@ function rows() {
 
 function refs() {
   return Array.isArray(window.__ADAM_PATH_RIBBON_REFS) ? window.__ADAM_PATH_RIBBON_REFS : [];
+}
+
+function view() {
+  return window.__ADAM_PATH_VIEW?.() || { renderer:null, scene:null, camera:null };
 }
 
 function candidateRows() {
@@ -59,13 +50,13 @@ function ensureMarker() {
   marker.id = 'adamPathCandidateMarker';
   Object.assign(marker.style, {
     position:'fixed',
-    width:'30px',
-    height:'30px',
-    marginLeft:'-15px',
-    marginTop:'-15px',
-    border:'3px solid #ff3b81',
+    width:'34px',
+    height:'34px',
+    marginLeft:'-17px',
+    marginTop:'-17px',
+    border:'4px solid #ff2f7d',
     borderRadius:'50%',
-    boxShadow:'0 0 0 2px #111, 0 0 14px rgba(255,59,129,.9)',
+    boxShadow:'0 0 0 2px #111, 0 0 18px rgba(255,47,125,.95)',
     pointerEvents:'none',
     zIndex:'2147483646',
     display:'none'
@@ -74,10 +65,10 @@ function ensureMarker() {
   markerLabel = document.createElement('div');
   Object.assign(markerLabel.style, {
     position:'fixed',
-    padding:'4px 6px',
+    padding:'5px 7px',
     background:'#111',
     color:'#ff8db5',
-    border:'1px solid #ff3b81',
+    border:'1px solid #ff2f7d',
     borderRadius:'3px',
     font:'11px/1.25 ui-monospace,SFMono-Regular,Menlo,monospace',
     whiteSpace:'nowrap',
@@ -95,23 +86,26 @@ function hideMarker() {
   if (marker) marker.style.display = 'none';
   if (markerLabel) markerLabel.style.display = 'none';
   const probe = document.getElementById('pathRibbonProbe');
-  if (probe) probe.textContent = 'Marker cleared. Use Prev / Next to cycle the spur candidates.';
+  if (probe) probe.textContent = 'Marker cleared. Use Prev / Next to cycle candidates.';
 }
 
 function updateMarker() {
-  if (!selectedPath || !lastCamera || !lastRenderer) return;
+  if (!selectedPath) return;
+
+  const { renderer, camera } = view();
   const source = sourceFor(selectedPath);
-  if (!source?.geometry) return;
+  if (!renderer?.domElement || !camera || !source?.geometry) return;
 
   source.geometry.computeBoundingBox();
   const box = source.geometry.boundingBox;
   if (!box) return;
 
   source.updateWorldMatrix(true, false);
-  const centre = box.getCenter(new THREE.Vector3()).applyMatrix4(source.matrixWorld).project(lastCamera);
-  const canvas = lastRenderer.domElement;
-  const rect = canvas?.getBoundingClientRect?.();
-  if (!rect) return;
+  camera.updateMatrixWorld?.(true);
+
+  const centre = box.getCenter(new THREE.Vector3()).applyMatrix4(source.matrixWorld).project(camera);
+  const rect = renderer.domElement.getBoundingClientRect();
+  if (!rect?.width || !rect?.height) return;
 
   ensureMarker();
   if (centre.z < -1 || centre.z > 1) {
@@ -122,19 +116,21 @@ function updateMarker() {
 
   const x = rect.left + (centre.x + 1) * 0.5 * rect.width;
   const y = rect.top + (1 - centre.y) * 0.5 * rect.height;
+
   marker.style.left = `${x}px`;
   marker.style.top = `${y}px`;
   marker.style.display = 'block';
-  markerLabel.style.left = `${x + 19}px`;
-  markerLabel.style.top = `${y - 8}px`;
+  markerLabel.style.left = `${x + 21}px`;
+  markerLabel.style.top = `${y - 9}px`;
   markerLabel.style.display = 'block';
 }
 
 function showSelection(index) {
   const list = candidateRows();
   const probe = document.getElementById('pathRibbonProbe');
+
   if (!list.length) {
-    if (probe) probe.textContent = 'Panel identifier: waiting for path ribbon audit data…';
+    if (probe) probe.textContent = 'Identifier: waiting for ribbon audit data. Press Run rail audit once, then use Next candidate.';
     return;
   }
 
@@ -192,16 +188,16 @@ function installUI() {
 
   row.append(prev, next, modeBtn, clear);
   probe.after(row);
-  probe.textContent = 'Scene objects are not clickable here. Use Prev / Next below; a pink marker will identify each likely spur without changing the WebGL scene.';
+  probe.textContent = 'Scene objects are not clickable. Use Prev / Next; a pink marker will identify candidates without changing the WebGL scene.';
   uiInstalled = true;
 }
 
-let waitFrames = 0;
-function boot() {
+function tick() {
   installUI();
-  if (!uiInstalled && waitFrames++ < 240) requestAnimationFrame(boot);
+  updateMarker();
+  requestAnimationFrame(tick);
 }
-requestAnimationFrame(boot);
+requestAnimationFrame(tick);
 
 window.__ADAM_PATH_PANEL_SELECT = showSelection;
 window.__ADAM_PATH_PANEL_CLEAR = hideMarker;
