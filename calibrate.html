@@ -37,6 +37,19 @@
     <h2>Building motion</h2><div id="motionCtls"></div>
     <h2>Lighting & background</h2><div id="lightCtls"></div>
     <h2>Building material</h2><div id="faceCtls"></div>
+
+    <h2>Object Material 2</h2>
+    <div id="material2Status" class="scroll-hint">waiting for selected objects…</div>
+    <div id="material2Ctls">
+      <div class="ctl color"><label>Material 2 face colour</label><input id="material2Face" type="color" value="#ebebeb"></div>
+      <div class="ctl"><label>Material 2 colour strength<span id="material2TintV" data-v></span></label><input id="material2Tint" type="range" min="0" max="1" step="0.01" value="0.70"></div>
+      <div class="ctl"><label>Material 2 brightness / white lift<span id="material2LiftV" data-v></span></label><input id="material2Lift" type="range" min="0" max="3" step="0.05" value="0.15"></div>
+      <div class="ctl"><label>Material 2 opacity<span id="material2OpacityV" data-v></span></label><input id="material2Opacity" type="range" min="0.05" max="1" step="0.01" value="0.94"></div>
+      <div class="ctl"><label>Material 2 roughness<span id="material2RoughnessV" data-v></span></label><input id="material2Roughness" type="range" min="0" max="1" step="0.01" value="0.97"></div>
+      <div class="ctl"><label>Material 2 metalness<span id="material2MetalnessV" data-v></span></label><input id="material2Metalness" type="range" min="0" max="0.3" step="0.01" value="0"></div>
+      <button class="btn ghost" id="copyMaterial2StyleBtn">Copy MATERIAL_2_STYLE</button>
+    </div>
+
     <h2>Base plate</h2><div id="slabCtls"></div>
     <h2>Edges</h2><div id="edgeCtls"></div>
     <h2>Glow</h2><div id="glowCtls"></div>
@@ -93,6 +106,7 @@
   }
 }
 </script>
+<script type="module" src="./calibrate/object-material-2.js?v=material2-71-20260821-1800"></script>
 <script type="module" src="./calibrate/path-ribbon-glow.js?v=strip-controls-restored-20260821-1602"></script>
 <script type="module" src="./calibrate/rim-glow-filter.js?v=targets-72-20260821-1320"></script>
 <script type="module" src="./calibrate/glow-bootstrap.js?v=path-ribbon-glow-20260821-1336"></script>
