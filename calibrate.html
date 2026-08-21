@@ -41,56 +41,6 @@
     <h2>Edges</h2><div id="edgeCtls"></div>
     <h2>Glow</h2><div id="glowCtls"></div>
 
-    <h2>Strip edges & glow</h2>
-    <div class="row tog">
-      <button id="tStripEdges" class="on">Strip edges</button>
-      <button id="tStripGlow" class="on">Strip glow</button>
-    </div>
-    <div id="stripGlowStatus" class="scroll-hint">waiting for strip/path mesh capture…</div>
-    <div id="stripGlowCtls">
-      <div class="ctl color">
-        <label>Strip edge colour (RGB)</label>
-        <input id="stripEdgeColor" type="color" value="#242424">
-      </div>
-      <div class="ctl">
-        <label>Strip edge opacity<span id="stripEdgeOpacityV" data-v>0.28</span></label>
-        <input id="stripEdgeOpacity" type="range" min="0" max="1" step="0.01" value="0.28">
-      </div>
-      <div class="ctl">
-        <label>Strip edge width (px)<span id="stripEdgeWidthV" data-v>1.15</span></label>
-        <input id="stripEdgeWidth" type="range" min="0.25" max="5" step="0.05" value="1.15">
-      </div>
-      <div class="ctl">
-        <label>Strip edge angle °<span id="stripEdgeAngleV" data-v>30</span></label>
-        <input id="stripEdgeAngle" type="range" min="1" max="60" step="1" value="30">
-      </div>
-      <div class="ctl color">
-        <label>Strip glow colour (RGB)</label>
-        <input id="stripGlowColor" type="color" value="#86bf40">
-      </div>
-      <div class="ctl">
-        <label>Strip inner glow opacity<span id="stripGlowOpacityV" data-v>0.52</span></label>
-        <input id="stripGlowOpacity" type="range" min="0" max="1" step="0.01" value="0.52">
-      </div>
-      <div class="ctl">
-        <label>Strip inner glow width (px)<span id="stripGlowWidthV" data-v>9.00</span></label>
-        <input id="stripGlowWidth" type="range" min="1" max="25" step="0.1" value="9">
-      </div>
-      <div class="ctl">
-        <label>Strip outer halo opacity<span id="stripHaloOpacityV" data-v>0.20</span></label>
-        <input id="stripHaloOpacity" type="range" min="0" max="1" step="0.01" value="0.20">
-      </div>
-      <div class="ctl">
-        <label>Strip outer halo width (px)<span id="stripHaloWidthV" data-v>22.00</span></label>
-        <input id="stripHaloWidth" type="range" min="1" max="45" step="0.25" value="22">
-      </div>
-      <div class="ctl">
-        <label>Strip glow expansion<span id="stripGlowExpansionV" data-v>0.0025</span></label>
-        <input id="stripGlowExpansion" type="range" min="0" max="0.03" step="0.0005" value="0.0025">
-      </div>
-      <button class="btn ghost" id="copyStripStyleBtn">Copy STRIP_STYLE</button>
-    </div>
-
     <h2>Isometric dots</h2>
     <div class="row tog"><button id="tAnimate">Animate dots</button></div>
     <div id="dotCtls"></div>
@@ -123,9 +73,8 @@
   }
 }
 </script>
-<script type="module" src="./calibrate/strip-edge-glow.js?v=dedicated-strip-layer-v5-20260821-1232"></script>
-<script type="module" src="./calibrate/rim-glow-filter.js?v=path-edges-dual-halo-20260821-0037"></script>
-<script type="module" src="./calibrate/glow-bootstrap.js?v=strip-native-glow-20260821-0048"></script>
+<script type="module" src="./calibrate/rim-glow-filter.js?v=targets-72-20260821-1320"></script>
+<script type="module" src="./calibrate/glow-bootstrap.js?v=paths-native-glow-20260821-1320"></script>
 <script type="module" src="./calibrate/keyframe-add-unlock.js?v=20260820-1553"></script>
 <script type="module" src="./calibrate/responsive-keyframes.js?v=20260820-2312"></script>
 <script type="module" src="./calibrate/rgb-color-controls.js?v=20260821-0004"></script>
