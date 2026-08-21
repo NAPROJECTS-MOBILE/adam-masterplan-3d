@@ -11,19 +11,19 @@ import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 
     Scene_1/Main_Group/paths/**
 
-  The current 10° rail treatment is user-confirmed working on the main bundle.
-  This revision deliberately DOES NOT change that rendering logic. It adds
-  runtime diagnostics so the remaining angled spur failure can be measured
-  instead of guessed at:
+  The 10° EdgesGeometry rail treatment is user-confirmed working on the long
+  main bundle. The remaining visually failing short angled spurs are also under
+  /paths/, but they are the one exact structural subset that share source
+  geometry between 3–4 separate mesh nodes.
 
-    - per-ribbon rail count / segment count / visibility
-    - source-vs-rail world-box centre offset
-    - actual scene membership
-    - geometry UUID / shared-geometry count
-    - click-to-identify a visible path ribbon in the canvas
-
-  Colours/opacity/width still follow the normal Edge and Glow calibrator values;
-  only the path edge angle is independent.
+  Static analysis says their EdgesGeometry output is valid, so shared geometry
+  is used here only as a SAFE DISCRIMINATOR for the known failing subset, not as
+  an explanation of the bug. Those shared groups now use a transform-safe
+  principal-axis centreline treatment instead of hundreds of generated edge
+  segments. Each mesh still receives its own LineSegments2 objects, so every
+  spur gets an independent dark core + inner glow + outer halo at its own node
+  transform. Unique-geometry ribbons keep the already-working 10° rail code
+  completely unchanged.
 */
 
 const PATH_PREFIX = 'Scene_1/Main_Group/paths/';
@@ -33,6 +33,7 @@ const entries = [];
 let builtAngle = null;
 let initialized = false;
 let totalRailSegments = 0;
+let fallbackCount = 0;
 let lastRenderer = null;
 let lastScene = null;
 let lastCamera = null;
@@ -88,7 +89,6 @@ function capture(root) {
 }
 
 // Capture exact mesh references before app-v2 classifies/recentres the model.
-// Do not attach line children until app-v2 has finished its own traversal.
 const originalLoadAsync = GLTFLoader.prototype.loadAsync;
 GLTFLoader.prototype.loadAsync = async function adamCapturePathRails(...args) {
   try {
@@ -100,6 +100,15 @@ GLTFLoader.prototype.loadAsync = async function adamCapturePathRails(...args) {
     GLTFLoader.prototype.loadAsync = originalLoadAsync;
   }
 };
+
+function geometryShareCounts() {
+  const counts = new Map();
+  for (const { mesh } of retained) {
+    const uuid = mesh.geometry?.uuid || '(none)';
+    counts.set(uuid, (counts.get(uuid) || 0) + 1);
+  }
+  return counts;
+}
 
 function longestAxisOf(mesh) {
   mesh.geometry.computeBoundingBox();
@@ -116,7 +125,7 @@ function railGeometryForMesh(mesh, angle) {
   const pos = edges.attributes.position;
   if (!pos || pos.count < 2) {
     edges.dispose();
-    return { geometry:null, segments:0 };
+    return { geometry:null, segments:0, mode:'rails' };
   }
 
   const lengthAxis = longestAxisOf(mesh);
@@ -130,6 +139,7 @@ function railGeometryForMesh(mesh, angle) {
     const along = d[lengthAxis];
     const across = Math.max(d[(lengthAxis + 1) % 3], d[(lengthAxis + 2) % 3]);
 
+    // Keep the longitudinal rails; reject end-cap/cross-profile strokes.
     if (along < across * 0.65) continue;
 
     kept.push(
@@ -139,11 +149,74 @@ function railGeometryForMesh(mesh, angle) {
   }
 
   edges.dispose();
-  if (!kept.length) return { geometry:null, segments:0 };
+  if (!kept.length) return { geometry:null, segments:0, mode:'rails' };
 
   const geometry = new LineSegmentsGeometry();
   geometry.setPositions(new Float32Array(kept));
-  return { geometry, segments:kept.length / 6 };
+  return { geometry, segments:kept.length / 6, mode:'rails' };
+}
+
+// One straight local-space centreline through the actual ribbon geometry.
+// Principal-axis extraction avoids assuming the authored strip aligns to X/Y/Z.
+// This is intentionally used only for shared-geometry spur groups; the working
+// long bundle remains on the exact railGeometryForMesh path above.
+function principalCentrelineGeometry(mesh) {
+  const pos = mesh.geometry?.attributes?.position;
+  if (!pos || pos.count < 2) return { geometry:null, segments:0, mode:'shared-centreline' };
+
+  const centre = new THREE.Vector3();
+  const p = new THREE.Vector3();
+  for (let i = 0; i < pos.count; i++) {
+    p.fromBufferAttribute(pos, i);
+    centre.add(p);
+  }
+  centre.multiplyScalar(1 / pos.count);
+
+  let xx=0, xy=0, xz=0, yy=0, yz=0, zz=0;
+  for (let i = 0; i < pos.count; i++) {
+    p.fromBufferAttribute(pos, i).sub(centre);
+    xx += p.x*p.x; xy += p.x*p.y; xz += p.x*p.z;
+    yy += p.y*p.y; yz += p.y*p.z; zz += p.z*p.z;
+  }
+
+  // Seed on the axis with greatest variance, then power-iterate the covariance
+  // matrix to obtain the dominant direction even for diagonally-authored strips.
+  let axis = new THREE.Vector3(1,0,0);
+  if (yy >= xx && yy >= zz) axis.set(0,1,0);
+  else if (zz >= xx && zz >= yy) axis.set(0,0,1);
+
+  for (let i = 0; i < 16; i++) {
+    const x = xx*axis.x + xy*axis.y + xz*axis.z;
+    const y = xy*axis.x + yy*axis.y + yz*axis.z;
+    const z = xz*axis.x + yz*axis.y + zz*axis.z;
+    axis.set(x,y,z);
+    if (axis.lengthSq() < 1e-16) break;
+    axis.normalize();
+  }
+  if (axis.lengthSq() < 1e-12) return { geometry:null, segments:0, mode:'shared-centreline' };
+
+  let minT = Infinity, maxT = -Infinity;
+  for (let i = 0; i < pos.count; i++) {
+    p.fromBufferAttribute(pos, i).sub(centre);
+    const t = p.dot(axis);
+    minT = Math.min(minT, t);
+    maxT = Math.max(maxT, t);
+  }
+  if (!Number.isFinite(minT) || !Number.isFinite(maxT) || maxT - minT < 1e-6) {
+    return { geometry:null, segments:0, mode:'shared-centreline' };
+  }
+
+  // Tiny inset prevents any fat-line cap from extending beyond the real ribbon
+  // while still reaching essentially the full visible spur length.
+  const inset = (maxT - minT) * 0.01;
+  minT += inset;
+  maxT -= inset;
+  const a = centre.clone().addScaledVector(axis, minT);
+  const b = centre.clone().addScaledVector(axis, maxT);
+
+  const geometry = new LineSegmentsGeometry();
+  geometry.setPositions(new Float32Array([a.x,a.y,a.z,b.x,b.y,b.z]));
+  return { geometry, segments:1, mode:'shared-centreline' };
 }
 
 function clearLayers() {
@@ -155,6 +228,7 @@ function clearLayers() {
   }
   entries.length = 0;
   totalRailSegments = 0;
+  fallbackCount = 0;
 }
 
 function pathAngle() {
@@ -166,12 +240,16 @@ function pathAngle() {
 function rebuild() {
   const angle = pathAngle();
   clearLayers();
+  const shareCounts = geometryShareCounts();
 
   for (const retainedEntry of retained) {
     const source = retainedEntry.mesh;
     if (!source?.parent || !source.geometry?.attributes?.position) continue;
 
-    const result = railGeometryForMesh(source, angle);
+    const shareCount = shareCounts.get(source.geometry?.uuid || '(none)') || 1;
+    const result = shareCount > 1
+      ? principalCentrelineGeometry(source)
+      : railGeometryForMesh(source, angle);
     if (!result.geometry) continue;
 
     const outer = new LineSegments2(result.geometry, outerGlowMaterial);
@@ -181,6 +259,7 @@ function rebuild() {
     for (const line of [outer, inner, edge]) {
       line.userData.adamPathRailLayer = true;
       line.userData.adamPathRailSource = retainedEntry.originalPath;
+      line.userData.adamPathRailMode = result.mode;
       line.frustumCulled = false;
     }
 
@@ -189,8 +268,17 @@ function rebuild() {
     edge.renderOrder = 92;
 
     source.add(outer, inner, edge);
-    entries.push({ source, outer, inner, edge, segments:result.segments });
+    entries.push({
+      source,
+      outer,
+      inner,
+      edge,
+      segments:result.segments,
+      mode:result.mode,
+      geometrySharedBy:shareCount
+    });
     totalRailSegments += result.segments;
+    if (result.mode === 'shared-centreline') fallbackCount++;
   }
 
   builtAngle = angle;
@@ -199,7 +287,7 @@ function rebuild() {
 
   console.info(
     `[ADAM path rails] angle ${angle}° · ${entries.length}/${retained.length} ribbons · ` +
-    `${totalRailSegments} longitudinal segments.`
+    `${totalRailSegments} segments · shared-centreline fallback ${fallbackCount}`
   );
 }
 
@@ -269,7 +357,8 @@ function syncFromCalibrator() {
 function updateStatus(extra = '') {
   const status = document.getElementById('pathRibbonStatus');
   if (status) {
-    status.textContent = `${entries.length}/${retained.length} ribbons · ${totalRailSegments} rail segments · ${pathAngle()}°${extra ? ` · ${extra}` : ''}`;
+    status.textContent = `${entries.length}/${retained.length} ribbons · ${totalRailSegments} segments · ` +
+      `${fallbackCount} shared-spur fallbacks · ${pathAngle()}°${extra ? ` · ${extra}` : ''}`;
   }
 }
 
@@ -303,15 +392,6 @@ function lineSegmentCount(line) {
   return pos?.count ? Math.floor(pos.count / 2) : 0;
 }
 
-function geometryShareCounts() {
-  const counts = new Map();
-  for (const { mesh } of retained) {
-    const uuid = mesh.geometry?.uuid || '(none)';
-    counts.set(uuid, (counts.get(uuid) || 0) + 1);
-  }
-  return counts;
-}
-
 function auditRows() {
   const shareCounts = geometryShareCounts();
   return retained.map(({ mesh, originalPath }) => {
@@ -330,6 +410,7 @@ function auditRows() {
     return {
       name: shortPath(originalPath),
       fullPath: originalPath,
+      mode:builtEntry?.mode || '(none)',
       rails: rails.length,
       segments: builtEntry?.segments ?? lineSegmentCount(rails[0]),
       visible: rails.map(r => r.visible),
@@ -367,7 +448,7 @@ function renderAudit() {
   const probe = document.getElementById('pathRibbonProbe');
   if (probe) {
     if (!bad.length) {
-      probe.textContent = `Runtime audit: all ${rows.length} retained ribbons have 3 rail layers in-scene with non-empty geometry. Click-identify one of the visually failing angled spurs so we can inspect its exact runtime row.`;
+      probe.textContent = `Runtime audit: all ${rows.length} retained ribbons have 3 visible rail layers. ${fallbackCount} shared-geometry angled spurs are using the new principal-centreline fallback.`;
     } else {
       probe.textContent = `Runtime audit found ${bad.length} suspicious ribbon(s): ${bad.map(r => r.name).join(', ')}`;
     }
@@ -386,10 +467,6 @@ async function copyAudit() {
   } catch {
     console.log(text);
   }
-}
-
-function auditRowForMesh(mesh) {
-  return auditRows().find(row => row.fullPath === mesh?.userData?.adamPathRailSource || row.fullPath === pathOf(mesh)) || null;
 }
 
 function identifyFromEvent(event) {
@@ -428,7 +505,7 @@ function identifyFromEvent(event) {
 
   if (probe) {
     probe.textContent = row
-      ? `CLICK: ${label} · rails ${row.rails} · segs ${row.segments} · centre offset ${row.centreOffset} · shared geometry ×${row.geometrySharedBy} · visible ${row.visible.join('/')}`
+      ? `CLICK: ${label} · ${row.mode} · rails ${row.rails} · segs ${row.segments} · centre offset ${row.centreOffset} · shared geometry ×${row.geometrySharedBy} · visible ${row.visible.join('/')}`
       : `CLICK: ${label} · no audit row found`;
   }
 }
@@ -454,7 +531,7 @@ function bindControls() {
     event.currentTarget.classList.toggle('on', clickIdentifyEnabled);
     event.currentTarget.textContent = clickIdentifyEnabled ? 'Click identify: ON' : 'Click identify';
     const probe = document.getElementById('pathRibbonProbe');
-    if (probe && clickIdentifyEnabled) probe.textContent = 'Click-identify is ON. Click one of the visually failing angled spur strips in the canvas.';
+    if (probe && clickIdentifyEnabled) probe.textContent = 'Click-identify is ON. Click one of the path strips in the canvas.';
   });
   document.addEventListener('click', identifyFromEvent, true);
 
@@ -490,9 +567,7 @@ function waitForAppControls() {
   else console.warn('[ADAM path rails] app-v2 controls never became ready.');
 }
 
-// Capture live scene/camera/renderer references without changing the render.
-// rim-glow-filter loads after this module and wraps this function, so both hooks
-// remain active in the normal render chain.
+// Capture live renderer/scene/camera references without changing the render.
 const previousRender = THREE.WebGLRenderer.prototype.render;
 THREE.WebGLRenderer.prototype.render = function adamPathRailProbeRender(scene, camera) {
   lastRenderer = this;
