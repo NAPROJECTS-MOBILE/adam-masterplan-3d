@@ -50,10 +50,10 @@
     <p class="scroll-hint">The working 10° path geometry is unchanged. Depth testing and tighter path-only glow are applied directly by the ribbon renderer.</p>
     <div class="row tog">
       <button id="pathRailAuditBtn">Run rail audit</button>
-      <button id="pathRailIdentifyBtn">Click identify</button>
+      <button id="pathRailIdentifyBtn">Scene picking unavailable</button>
       <button id="pathRailCopyBtn">Copy audit</button>
     </div>
-    <p id="pathRibbonProbe" class="scroll-hint">Click identify now works by pointer coordinates over the scene, even if the canvas itself is not the clickable DOM target. Hover near a tiny spur/end dot to preview the nearest ribbon, then press/click there to lock its details.</p>
+    <p id="pathRibbonProbe" class="scroll-hint">The scene itself is not an interactive picking surface here. Use the panel controls below to cycle likely spur candidates; a pink marker will identify each one without changing the WebGL scene.</p>
 
     <h2>Isometric dots</h2>
     <div class="row tog"><button id="tAnimate">Animate dots</button></div>
@@ -90,7 +90,7 @@
 <script type="module" src="./calibrate/path-ribbon-glow.js?v=direct-depth-tight-glow-20260821-1451"></script>
 <script type="module" src="./calibrate/rim-glow-filter.js?v=targets-72-20260821-1320"></script>
 <script type="module" src="./calibrate/glow-bootstrap.js?v=path-ribbon-glow-20260821-1336"></script>
-<script type="module" src="./calibrate/path-ribbon-nearest-probe.js?v=coordinate-probe-20260821-1513"></script>
+<script type="module" src="./calibrate/path-ribbon-nearest-probe.js?v=panel-marker-20260821-1534"></script>
 <script type="module" src="./calibrate/keyframe-add-unlock.js?v=20260820-1553"></script>
 <script type="module" src="./calibrate/responsive-keyframes.js?v=20260820-2312"></script>
 <script type="module" src="./calibrate/rgb-color-controls.js?v=20260821-0004"></script>
