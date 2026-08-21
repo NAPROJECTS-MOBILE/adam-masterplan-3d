@@ -47,13 +47,13 @@
       <label>Path edge angle °<span id="pathEdgeAngleV" data-v>10°</span></label>
       <input id="pathEdgeAngle" type="range" min="5" max="18" step="1" value="10">
     </div>
-    <p class="scroll-hint">The working path-ribbon renderer is unchanged. These diagnostics inspect the remaining angled spurs at runtime rather than guessing from the GLB.</p>
+    <p class="scroll-hint">Unique-geometry ribbons keep the working 10° rail treatment. Shared-geometry angled spur groups now use their own per-mesh centreline edge + glow fallback so every branch is drawn independently.</p>
     <div class="row tog">
       <button id="pathRailAuditBtn">Run rail audit</button>
       <button id="pathRailIdentifyBtn">Click identify</button>
       <button id="pathRailCopyBtn">Copy audit</button>
     </div>
-    <p id="pathRibbonProbe" class="scroll-hint">Run rail audit first. If it reports no runtime anomalies, turn on Click identify and click a visually failing angled spur.</p>
+    <p id="pathRibbonProbe" class="scroll-hint">The runtime audit remains available if any spur is still missing after the shared-spur fallback.</p>
 
     <h2>Isometric dots</h2>
     <div class="row tog"><button id="tAnimate">Animate dots</button></div>
@@ -87,7 +87,7 @@
   }
 }
 </script>
-<script type="module" src="./calibrate/path-ribbon-glow.js?v=runtime-rail-audit-20260821-1407"></script>
+<script type="module" src="./calibrate/path-ribbon-glow.js?v=shared-spur-centreline-20260821-1417"></script>
 <script type="module" src="./calibrate/rim-glow-filter.js?v=targets-72-20260821-1320"></script>
 <script type="module" src="./calibrate/glow-bootstrap.js?v=path-ribbon-glow-20260821-1336"></script>
 <script type="module" src="./calibrate/keyframe-add-unlock.js?v=20260820-1553"></script>
