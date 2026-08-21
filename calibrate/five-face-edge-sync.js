@@ -7,30 +7,29 @@ import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 /*
   ADAM calibrator — persistent moved-mesh edge + glow.
 
-  IMPORTANT: this is the same retained-object approach that fixed the earlier
-  moved/re-parented meshes, but applied to the ENTIRE original cluster tree.
+  This keeps the successful retained-object technique from the earlier moved
+  mesh fixes, but corrects one important mistake in the previous attempt:
 
-  Some of the long thin plan/strip meshes are moved or re-parented by the Spline
-  motion layer. Looking for them later via their current GLB path is therefore
-  unreliable: once their hierarchy changes they no longer match
-  `Scene_1/Main_Group/clusters/...`, so a path-based glow pass can simply miss
-  them even though the geometry is visible.
+  the generic rim helper had already attached an additive line to many flat
+  strip meshes. `hasGlow(mesh)` therefore returned true even when that line was
+  effectively invisible / wrong for the near-coplanar plan geometry, so the
+  retained fallback skipped exactly the meshes we were trying to rescue.
 
-  We solve that at the source:
-    1. intercept the single GLB load BEFORE app-v2 / spline-motion runs;
-    2. retain every real mesh object that originally lived under the clusters;
-    3. after app-v2 and the normal rim helper have built their native lines,
-       inspect those RETAINED object references rather than rediscovering paths;
-    4. only where a retained mesh is still missing an edge and/or glow, attach
-       the missing line layers directly to that exact mesh object;
-    5. because the lines are children of the retained object they follow every
-       later move, rotation and re-parent operation automatically.
+  New rule:
+    - every mesh that was ORIGINALY FLAT (< 0.1 world-space height) in the
+      untouched GLB gets its own explicit retained edge + visible additive glow,
+      regardless of whether another helper claims a glow child already exists;
+    - non-flat architecture still only receives genuinely missing layers;
+    - the explicit flat glow uses depthTest:false and a stronger tight core plus
+      broad halo so it stays visible over the plan surface;
+    - all layers are children of the retained original mesh object, so they move,
+      rotate and re-parent with Spline motion exactly as the mesh does.
 
-  The large site base is not inside Main_Group/clusters and is not captured.
-  The four historical villa no-glow exclusions remain respected.
+  The site base is outside Main_Group/clusters and is never captured.
 */
 
 const ORIGINAL_CLUSTER_PREFIX = 'Scene_1/Main_Group/clusters/';
+const FLAT_THRESHOLD = 0.1;
 
 const NO_GLOW_ORIGINAL_PATHS = new Set([
   'Scene_1/Main_Group/clusters/cluster_3/villa/Rectangle_2_4',
@@ -39,8 +38,6 @@ const NO_GLOW_ORIGINAL_PATHS = new Set([
   'Scene_1/Main_Group/clusters/cluster_3/villa_Instance/Rectangle_2_3'
 ]);
 
-// These five remain useful as a diagnostic subset because they were the first
-// thin architectural meshes that exposed the re-parent/path problem.
 const LEGACY_EXACT_PATHS = [
   'Scene_1/Main_Group/clusters/cluster_2/Rectangle_2_5',
   'Scene_1/Main_Group/clusters/cluster_2/Rectangle_10',
@@ -50,8 +47,12 @@ const LEGACY_EXACT_PATHS = [
 ];
 const LEGACY_EXACT_SET = new Set(LEGACY_EXACT_PATHS);
 
-const OUTER_WIDTH_MULTIPLIER = 2.2;
-const OUTER_OPACITY_MULTIPLIER = 0.32;
+const FLAT_INNER_OPACITY_MULTIPLIER = 3.5;
+const FLAT_OUTER_OPACITY_MULTIPLIER = 1.15;
+const FLAT_INNER_WIDTH_MULTIPLIER = 1.15;
+const FLAT_OUTER_WIDTH_MULTIPLIER = 2.45;
+const NORMAL_OUTER_OPACITY_MULTIPLIER = 0.32;
+const NORMAL_OUTER_WIDTH_MULTIPLIER = 2.2;
 
 function pathOf(object) {
   const parts = [];
@@ -69,30 +70,45 @@ let captureDone = false;
 function captureClusterMeshes(root) {
   const captured = [];
   const legacyFound = new Set();
+  let flatCount = 0;
 
+  root?.updateWorldMatrix?.(true, true);
   root?.traverse?.(object => {
     if (!object?.isMesh || object.isLineSegments2 || !object.geometry?.attributes?.position) return;
+
     const originalPath = pathOf(object);
     if (!originalPath.startsWith(ORIGINAL_CLUSTER_PREFIX)) return;
 
+    const box = new THREE.Box3().setFromObject(object);
+    const worldSize = box.getSize(new THREE.Vector3());
+    const originalWorldHeight = Math.abs(worldSize.y);
+    const isOriginalFlat = originalWorldHeight < FLAT_THRESHOLD;
+
+    if (isOriginalFlat) flatCount++;
     if (LEGACY_EXACT_SET.has(originalPath)) legacyFound.add(originalPath);
-    captured.push({ originalPath, mesh:object });
+
+    captured.push({
+      originalPath,
+      mesh:object,
+      originalWorldHeight,
+      isOriginalFlat
+    });
   });
 
   capturedClusterMeshes = captured;
   captureDone = true;
 
   console.info(
-    `[ADAM retained cluster glow] captured ${captured.length} original cluster mesh object(s) ` +
-    `before Spline motion; legacy exact targets ${legacyFound.size}/${LEGACY_EXACT_PATHS.length}`
+    `[ADAM retained flat glow] captured ${captured.length} original cluster mesh object(s), ` +
+    `${flatCount} classified flat before Spline motion; legacy exact ${legacyFound.size}/${LEGACY_EXACT_PATHS.length}`
   );
 
   const missingLegacy = LEGACY_EXACT_PATHS.filter(path => !legacyFound.has(path));
-  if (missingLegacy.length) console.warn('[ADAM retained cluster glow] legacy capture missing:', missingLegacy);
+  if (missingLegacy.length) console.warn('[ADAM retained flat glow] legacy capture missing:', missingLegacy);
 }
 
-// This module is intentionally loaded before glow-bootstrap. The hook sees the
-// pristine GLB hierarchy, retains object references, then restores GLTFLoader.
+// Loaded before glow-bootstrap, so this sees the pristine hierarchy. Keep object
+// references, then restore GLTFLoader immediately.
 const originalLoadAsync = GLTFLoader.prototype.loadAsync;
 GLTFLoader.prototype.loadAsync = async function adamCaptureOriginalClusterMeshes(...args) {
   try {
@@ -184,9 +200,6 @@ const edgeMaterial = new LineMaterial({
 });
 edgeMaterial.toneMapped = false;
 
-// The retained strips can be effectively coplanar with other plan geometry.
-// Disable depth testing for only these fallback glow lines so a correctly-built
-// glow cannot disappear behind the surface it is meant to outline.
 const innerGlowMaterial = new LineMaterial({
   transparent:true,
   depthTest:false,
@@ -224,9 +237,11 @@ function clearPersistent() {
   clearLines(persistentOuterGlow);
 }
 
-function addLine(mesh, geometry, material, target, marker, renderOrder, instanceMatrix = null) {
+function addLine(entry, geometry, material, target, marker, renderOrder, instanceMatrix = null) {
   const line = new LineSegments2(geometry.clone(), material);
   line.userData[marker] = true;
+  line.userData.adamRetainedFlat = entry.isOriginalFlat;
+  line.userData.adamOriginalPath = entry.originalPath;
   line.frustumCulled = false;
   line.renderOrder = renderOrder;
 
@@ -236,43 +251,26 @@ function addLine(mesh, geometry, material, target, marker, renderOrder, instance
     line.userData.adamRetainedBaseMatrix = instanceMatrix.clone();
   }
 
-  mesh.add(line);
+  entry.mesh.add(line);
   target.push(line);
 }
 
-function addMissingLayers(entry, geometry, needEdge, needGlow, instanceMatrix = null) {
+function addLayers(entry, geometry, needEdge, needGlow, instanceMatrix = null) {
   if (needEdge) {
-    // Use the marker already understood by rim-glow-filter so our fallback edge
-    // is never mistaken for one of app-v2's native template lines.
     addLine(
-      entry.mesh,
-      geometry,
-      edgeMaterial,
-      persistentEdges,
-      'adamSupplementalRimEdge',
-      8,
-      instanceMatrix
+      entry, geometry, edgeMaterial, persistentEdges,
+      'adamSupplementalRimEdge', 20, instanceMatrix
     );
   }
 
   if (needGlow) {
     addLine(
-      entry.mesh,
-      geometry,
-      innerGlowMaterial,
-      persistentInnerGlow,
-      'adamSupplementalRimGlow',
-      10,
-      instanceMatrix
+      entry, geometry, innerGlowMaterial, persistentInnerGlow,
+      'adamSupplementalRimGlow', 22, instanceMatrix
     );
     addLine(
-      entry.mesh,
-      geometry,
-      outerGlowMaterial,
-      persistentOuterGlow,
-      'adamSupplementalOuterGlow',
-      9,
-      instanceMatrix
+      entry, geometry, outerGlowMaterial, persistentOuterGlow,
+      'adamSupplementalOuterGlow', 21, instanceMatrix
     );
   }
 }
@@ -281,23 +279,29 @@ function rebuild(angle) {
   clearPersistent();
   if (!captureDone || !capturedClusterMeshes.length) return;
 
+  let forcedFlatMeshes = 0;
   let missingEdgeMeshes = 0;
   let missingGlowMeshes = 0;
   let skippedNoGlow = 0;
-  let lineInstances = 0;
 
   for (const entry of capturedClusterMeshes) {
     const mesh = entry.mesh;
     if (!mesh?.parent || !mesh.geometry?.attributes?.position) continue;
 
-    const needEdge = !hasEdge(mesh);
     const glowAllowed = !NO_GLOW_ORIGINAL_PATHS.has(entry.originalPath);
-    const needGlow = glowAllowed && !hasGlow(mesh);
+
+    // THIS is the key correction: originally-flat meshes are forced even if
+    // another helper has already added a nominal edge/glow child. Those generic
+    // children were causing our prior `hasGlow()` check to skip these strips.
+    const forceFlat = entry.isOriginalFlat;
+    const needEdge = forceFlat || !hasEdge(mesh);
+    const needGlow = glowAllowed && (forceFlat || !hasGlow(mesh));
+
     if (!glowAllowed) skippedNoGlow++;
     if (!needEdge && !needGlow) continue;
-
-    if (needEdge) missingEdgeMeshes++;
-    if (needGlow) missingGlowMeshes++;
+    if (forceFlat) forcedFlatMeshes++;
+    if (!forceFlat && needEdge) missingEdgeMeshes++;
+    if (!forceFlat && needGlow) missingGlowMeshes++;
 
     const geometry = makeGeometry(mesh, angle);
     if (!geometry) continue;
@@ -306,12 +310,10 @@ function rebuild(angle) {
       const matrix = new THREE.Matrix4();
       for (let i = 0; i < mesh.count; i++) {
         mesh.getMatrixAt(i, matrix);
-        addMissingLayers(entry, geometry, needEdge, needGlow, matrix.clone());
-        lineInstances++;
+        addLayers(entry, geometry, needEdge, needGlow, matrix.clone());
       }
     } else {
-      addMissingLayers(entry, geometry, needEdge, needGlow);
-      lineInstances++;
+      addLayers(entry, geometry, needEdge, needGlow);
     }
 
     geometry.dispose();
@@ -320,20 +322,20 @@ function rebuild(angle) {
   built = true;
   buildSummary = {
     captured:capturedClusterMeshes.length,
+    flatCaptured:capturedClusterMeshes.filter(entry => entry.isOriginalFlat).length,
+    forcedFlatMeshes,
     missingEdgeMeshes,
     missingGlowMeshes,
     skippedNoGlow,
     edgeLines:persistentEdges.length,
     innerGlowLines:persistentInnerGlow.length,
-    outerGlowLines:persistentOuterGlow.length,
-    lineInstances
+    outerGlowLines:persistentOuterGlow.length
   };
 
   console.info(
-    `[ADAM retained cluster glow] fallback built from retained refs: ` +
-    `${missingEdgeMeshes} mesh(es) missing edge, ${missingGlowMeshes} mesh(es) missing glow; ` +
+    `[ADAM retained flat glow] FORCED ${forcedFlatMeshes} originally-flat mesh(es); ` +
     `${persistentEdges.length} edge / ${persistentInnerGlow.length} inner / ` +
-    `${persistentOuterGlow.length} outer line layer(s)`
+    `${persistentOuterGlow.length} outer retained layer(s)`
   );
 }
 
@@ -354,8 +356,6 @@ function sync() {
   const edge = edgeControls();
   const glow = glowControls();
 
-  // app-v2 and rim-glow-filter have already had a chance to build their normal
-  // lines before this render wrapper runs. Rebuild only our truly missing set.
   if (!built || edge.angle !== lastAngle) {
     lastAngle = edge.angle;
     rebuild(edge.angle);
@@ -365,16 +365,9 @@ function sync() {
   edgeMaterial.opacity = THREE.MathUtils.clamp(edge.opacity, 0, 1);
   edgeMaterial.linewidth = Math.max(0.01, edge.width);
 
-  // Match the normal calibrator glow controls exactly for the tight core. The
-  // second line is simply a broader low-alpha halo derived from that same style.
   const baseGlowOpacity = THREE.MathUtils.clamp(glow.opacity * glow.strength, 0, 1);
   innerGlowMaterial.color.set(glow.color);
-  innerGlowMaterial.opacity = baseGlowOpacity;
-  innerGlowMaterial.linewidth = Math.max(0.1, glow.width);
-
   outerGlowMaterial.color.set(glow.color);
-  outerGlowMaterial.opacity = THREE.MathUtils.clamp(baseGlowOpacity * OUTER_OPACITY_MULTIPLIER, 0, 1);
-  outerGlowMaterial.linewidth = Math.max(glow.width + 2, glow.width * OUTER_WIDTH_MULTIPLIER);
 
   const size = canvasSize();
   edgeMaterial.resolution.set(size.width, size.height);
@@ -385,13 +378,31 @@ function sync() {
   const glowVisible = toggleVisible('tGlow');
 
   for (const line of persistentEdges) line.visible = edgeVisible;
+
   for (const line of persistentInnerGlow) {
+    const isFlat = !!line.userData.adamRetainedFlat;
+    innerGlowMaterial.opacity = THREE.MathUtils.clamp(
+      baseGlowOpacity * (isFlat ? FLAT_INNER_OPACITY_MULTIPLIER : 1), 0, 1
+    );
+    innerGlowMaterial.linewidth = Math.max(
+      0.1,
+      glow.width * (isFlat ? FLAT_INNER_WIDTH_MULTIPLIER : 1)
+    );
     line.visible = glowVisible;
-    applyExpansion(line, glow.expansion, 1);
+    applyExpansion(line, glow.expansion, isFlat ? 1.35 : 1);
   }
+
   for (const line of persistentOuterGlow) {
+    const isFlat = !!line.userData.adamRetainedFlat;
+    outerGlowMaterial.opacity = THREE.MathUtils.clamp(
+      baseGlowOpacity * (isFlat ? FLAT_OUTER_OPACITY_MULTIPLIER : NORMAL_OUTER_OPACITY_MULTIPLIER), 0, 1
+    );
+    outerGlowMaterial.linewidth = Math.max(
+      glow.width + 2,
+      glow.width * (isFlat ? FLAT_OUTER_WIDTH_MULTIPLIER : NORMAL_OUTER_WIDTH_MULTIPLIER)
+    );
     line.visible = glowVisible;
-    applyExpansion(line, glow.expansion, 1.8);
+    applyExpansion(line, glow.expansion, isFlat ? 2.2 : 1.8);
   }
 }
 
