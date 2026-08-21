@@ -4,14 +4,18 @@ import * as THREE from 'three';
   Diagnostic only. Does not touch path geometry, materials, visibility, depth,
   camera, motion, or any calibrator styling.
 
-  The remaining tiny spur-end artefacts are too small/non-pickable for Three's
-  normal raycaster. When Click identify is ON, this probe finds the nearest
-  already-rendered path rail in SCREEN SPACE instead, so a click near the dot is
-  enough to identify its source mesh.
+  The scene canvas can sit underneath non-interactive layout layers, so browser
+  pointer events do NOT reliably have the canvas as event.target. This probe
+  therefore identifies by pointer COORDINATES inside the rendered canvas rect,
+  not by DOM hit target. While Click identify is ON it also previews the nearest
+  path rail on hover, so the tiny remaining spur ends do not need to be directly
+  clickable at all.
 */
 
 let lastRenderer = null;
 let lastCamera = null;
+let hoverFrame = 0;
+let hoverEvent = null;
 
 const previousRender = THREE.WebGLRenderer.prototype.render;
 THREE.WebGLRenderer.prototype.render = function adamNearestPathProbeRender(scene, camera) {
@@ -51,6 +55,22 @@ function pointSegmentDistanceSq(px, py, ax, ay, bx, by) {
   return dx * dx + dy * dy;
 }
 
+function canvasRect() {
+  const canvas = lastRenderer?.domElement;
+  return canvas?.getBoundingClientRect?.() || null;
+}
+
+function insideCanvas(clientX, clientY) {
+  const rect = canvasRect();
+  if (!rect || rect.width <= 0 || rect.height <= 0) return false;
+  return clientX >= rect.left && clientX <= rect.right &&
+         clientY >= rect.top && clientY <= rect.bottom;
+}
+
+function identifyEnabled() {
+  return !!document.getElementById('pathRailIdentifyBtn')?.classList.contains('on');
+}
+
 function nearestRail(clientX, clientY) {
   const entries = window.__ADAM_PATH_RAIL_LAYERS;
   const canvas = lastRenderer?.domElement;
@@ -72,9 +92,6 @@ function nearestRail(clientX, clientY) {
     for (let i = 0; i < count; i++) {
       const a = screenPoint(start, i, line.matrixWorld, lastCamera, rect, v);
       const b = screenPoint(end, i, line.matrixWorld, lastCamera, rect, v);
-
-      // Segments entirely outside the camera depth range cannot be what the
-      // user is seeing, so ignore them before doing the 2D distance check.
       if ((a.z < -1 && b.z < -1) || (a.z > 1 && b.z > 1)) continue;
 
       const d2 = pointSegmentDistanceSq(clientX, clientY, a.x, a.y, b.x, b.y);
@@ -92,12 +109,33 @@ function nearestRail(clientX, clientY) {
   return best;
 }
 
-function nearestIdentifyFromClick(event) {
-  const button = document.getElementById('pathRailIdentifyBtn');
-  if (!button?.classList.contains('on')) return;
+function showHover(clientX, clientY) {
+  if (!identifyEnabled() || !insideCanvas(clientX, clientY)) return;
+  const best = nearestRail(clientX, clientY);
+  const probe = document.getElementById('pathRibbonProbe');
+  if (!best || !probe) return;
+  probe.textContent = `HOVER: ${shortPath(best.sourcePath)} · ${best.distancePx.toFixed(1)}px from pointer · press/click here to lock details`;
+}
 
-  const canvas = lastRenderer?.domElement;
-  if (!canvas || event.target !== canvas) return;
+function onPointerMove(event) {
+  if (!identifyEnabled() || !insideCanvas(event.clientX, event.clientY)) return;
+  hoverEvent = { x:event.clientX, y:event.clientY };
+  if (hoverFrame) return;
+  hoverFrame = requestAnimationFrame(() => {
+    hoverFrame = 0;
+    const p = hoverEvent;
+    hoverEvent = null;
+    if (p) showHover(p.x, p.y);
+  });
+}
+
+function nearestIdentifyFromPointer(event) {
+  if (!identifyEnabled()) return;
+
+  // IMPORTANT: do not inspect event.target here. The visible scene may be under
+  // a frame/overlay with pointer-events routed elsewhere. Coordinates are the
+  // authoritative test for whether the user pressed inside the rendered scene.
+  if (!insideCanvas(event.clientX, event.clientY)) return;
 
   const best = nearestRail(event.clientX, event.clientY);
   const probe = document.getElementById('pathRibbonProbe');
@@ -124,8 +162,9 @@ function nearestIdentifyFromClick(event) {
   }
 }
 
-// Register after the original click-identify handler. If its raycast misses,
-// this screen-space result becomes the final diagnostic text shown to the user.
-setTimeout(() => document.addEventListener('click', nearestIdentifyFromClick, true), 0);
+// Capture phase means this works even when another scene/layout element owns the
+// actual DOM hit. pointerdown fires earlier and more reliably than click here.
+document.addEventListener('pointermove', onPointerMove, true);
+document.addEventListener('pointerdown', nearestIdentifyFromPointer, true);
 
 window.__ADAM_NEAREST_PATH_RAIL = nearestRail;
