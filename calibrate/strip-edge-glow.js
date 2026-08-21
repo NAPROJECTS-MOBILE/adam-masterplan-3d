@@ -4,17 +4,21 @@ import { LineSegments2 } from 'three/addons/lines/LineSegments2.js';
 import { LineSegmentsGeometry } from 'three/addons/lines/LineSegmentsGeometry.js';
 import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 
-/* ADAM dedicated strip/path edge + glow v4
+/* ADAM dedicated strip/path edge + glow v5
    ----------------------------------------
-   This module is deliberately independent from app-v2's normal building edge
-   and glow controls. The controls now live statically in calibrate.html so they
-   are always visible even if model capture/render setup fails.
+   Separate from the normal building edge/glow system.
 
-   Targeting mirrors app-v2's flat/path concept, but avoids glow-bootstrap's
-   temporary Box3 classification patch by transforming each geometry bounding
-   box directly with matrixWorld. Every flat non-base mesh is retained BEFORE
-   spline-motion can re-parent it. The five historically troublesome thin meshes
-   are unconditional inclusions.
+   IMPORTANT v5 correction:
+   Earlier versions captured the five historical thin targets before motion, then
+   skipped the first-render scene sweep as soon as retained.length was non-zero.
+   That meant the controls could exist and even report captured targets while the
+   long visible path strips outside that five-mesh set were never enrolled at all.
+
+   v5 ALWAYS performs one sweep of the actual rendered scene on first render and
+   unions every flat non-base mesh into the retained set. Because references are
+   deduplicated, pre-motion explicit targets are kept and any additional visible
+   path/strip meshes are added. The status line reports how many the scene sweep
+   added, so this cannot fail silently again.
 */
 
 const FLAT_THRESHOLD = 0.100001;
@@ -44,8 +48,8 @@ const defaults = Object.freeze({
 });
 
 const style = { ...defaults };
-
 const $ = id => document.getElementById(id);
+
 const numberFrom = (id, fallback) => {
   const n = Number($(id)?.value);
   return Number.isFinite(n) ? n : fallback;
@@ -74,9 +78,32 @@ function bindToggle(id, key) {
   });
 }
 
+function bindRangeReadout(inputId, readoutId, digits = 2) {
+  const input = $(inputId);
+  const readout = $(readoutId);
+  if (!input || !readout) return;
+  const paint = () => {
+    const value = Number(input.value);
+    if (!Number.isFinite(value)) return;
+    readout.textContent = digits === 0 ? String(Math.round(value)) : value.toFixed(digits);
+  };
+  input.addEventListener('input', paint);
+  input.addEventListener('change', paint);
+  paint();
+}
+
 function bindUI() {
   bindToggle('tStripEdges', 'edgesVisible');
   bindToggle('tStripGlow', 'glowVisible');
+
+  bindRangeReadout('stripEdgeOpacity', 'stripEdgeOpacityV', 2);
+  bindRangeReadout('stripEdgeWidth', 'stripEdgeWidthV', 2);
+  bindRangeReadout('stripEdgeAngle', 'stripEdgeAngleV', 0);
+  bindRangeReadout('stripGlowOpacity', 'stripGlowOpacityV', 2);
+  bindRangeReadout('stripGlowWidth', 'stripGlowWidthV', 2);
+  bindRangeReadout('stripHaloOpacity', 'stripHaloOpacityV', 2);
+  bindRangeReadout('stripHaloWidth', 'stripHaloWidthV', 2);
+  bindRangeReadout('stripGlowExpansion', 'stripGlowExpansionV', 4);
 
   const copyButton = $('copyStripStyleBtn');
   if (copyButton) {
@@ -126,45 +153,58 @@ function isGiantBase(mesh) {
 let retained = [];
 let captureDone = false;
 let captureSource = 'waiting';
+let preMotionCount = 0;
+let sceneSweepAdded = null;
 
 function addRetained(mesh, originalPath, explicit, worldSize) {
-  if (retained.some(entry => entry.mesh === mesh)) return;
+  if (retained.some(entry => entry.mesh === mesh)) return false;
   mesh.userData.adamDedicatedStrip = true;
   mesh.userData.adamDedicatedStripOriginalPath = originalPath;
   retained.push({ mesh, originalPath, explicit, worldSize:worldSize?.clone?.() || null });
+  return true;
 }
 
 function captureFromRoot(root, source) {
-  if (!root?.traverse) return;
+  if (!root?.traverse) return { added:0, scanned:0, flat:0, explicitCount:0 };
   root.updateWorldMatrix?.(true, true);
+
   let scanned = 0;
   let flat = 0;
   let explicitCount = 0;
+  let added = 0;
 
   root.traverse(mesh => {
     if (!mesh?.isMesh || mesh.isLineSegments2 || !mesh.geometry?.attributes?.position) return;
     scanned++;
 
     const originalPath = pathOf(mesh);
-    const explicit = EXPLICIT_STRIP_PATHS.has(originalPath);
+    const explicit = EXPLICIT_STRIP_PATHS.has(originalPath) || !!mesh.userData?.adamDedicatedStrip;
     const worldSize = geometryWorldSize(mesh);
     if (!worldSize) return;
 
     const isFlat = Math.abs(worldSize.y) < FLAT_THRESHOLD;
     if (isFlat) flat++;
-    if (explicit) explicitCount++;
+    if (EXPLICIT_STRIP_PATHS.has(originalPath)) explicitCount++;
 
     if (!explicit && (!isFlat || isGiantBase(mesh))) return;
-    addRetained(mesh, originalPath, explicit, worldSize);
+    if (addRetained(mesh, originalPath, explicit, worldSize)) added++;
   });
 
   captureDone = true;
   captureSource = source;
-  updateStatus(`captured ${retained.length} strip/path meshes · ${explicitCount}/5 explicit`);
   console.info(
-    `[ADAM dedicated strip/path v4] ${source}: scanned=${scanned}, flat=${flat}, ` +
-    `retained=${retained.length}, explicit=${explicitCount}/5`
+    `[ADAM dedicated strip/path v5] ${source}: scanned=${scanned}, flat=${flat}, ` +
+    `added=${added}, retained=${retained.length}, explicit=${explicitCount}/5`
   );
+  return { added, scanned, flat, explicitCount };
+}
+
+function updateStatus(extra = '') {
+  const el = $('stripGlowStatus');
+  if (!el) return;
+  const built = innerGlowLines.length;
+  const sweep = sceneSweepAdded === null ? 'scene sweep pending' : `scene sweep +${sceneSweepAdded}`;
+  el.textContent = `${retained.length} strip/path meshes · ${built} glow layers · ${sweep}${extra ? ` · ${extra}` : ''}`;
 }
 
 // Capture the untouched GLB before app-v2 / spline-motion re-parent meshes.
@@ -172,7 +212,9 @@ const originalLoadAsync = GLTFLoader.prototype.loadAsync;
 GLTFLoader.prototype.loadAsync = async function adamCaptureDedicatedStripPaths(...args) {
   try {
     const gltf = await originalLoadAsync.apply(this, args);
-    captureFromRoot(gltf?.scene, 'pre-motion GLB');
+    const result = captureFromRoot(gltf?.scene, 'pre-motion GLB');
+    preMotionCount = retained.length;
+    updateStatus(`pre-motion ${preMotionCount}`);
     return gltf;
   } finally {
     GLTFLoader.prototype.loadAsync = originalLoadAsync;
@@ -207,7 +249,7 @@ const edgeLines = [];
 const innerGlowLines = [];
 const outerGlowLines = [];
 let builtAngle = null;
-let fallbackDiscoveryDone = false;
+let sceneSweepDone = false;
 
 function clearLines(lines) {
   for (const line of lines) {
@@ -290,11 +332,9 @@ function rebuild() {
   }
 
   builtAngle = style.edgeAngle;
-  updateStatus(
-    `${retained.length} strip/path meshes · ${builtMeshes} built · ${innerGlowLines.length} glow layers`
-  );
+  updateStatus(`${builtMeshes} built${emptyGeometry ? ` · ${emptyGeometry} empty` : ''}`);
   console.info(
-    `[ADAM dedicated strip/path v4] built meshes=${builtMeshes}, edge=${edgeLines.length}, ` +
+    `[ADAM dedicated strip/path v5] built meshes=${builtMeshes}, edge=${edgeLines.length}, ` +
     `inner=${innerGlowLines.length}, halo=${outerGlowLines.length}, empty=${emptyGeometry}`
   );
 }
@@ -329,27 +369,28 @@ function hideForeignLines() {
   }
 }
 
-function updateStatus(text) {
-  const el = $('stripGlowStatus');
-  if (el) el.textContent = text;
-}
+function sweepRenderedScene(scene) {
+  if (sceneSweepDone) return;
+  sceneSweepDone = true;
 
-function fallbackDiscover(scene) {
-  if (fallbackDiscoveryDone || retained.length) return;
-  fallbackDiscoveryDone = true;
-  captureFromRoot(scene, 'first-render fallback');
-  builtAngle = null;
+  // This MUST run even when pre-motion capture already found some meshes. That
+  // retained.length gate was the bug that made the visible path strips inert.
+  const before = retained.length;
+  const result = captureFromRoot(scene, 'first-render scene sweep');
+  sceneSweepAdded = retained.length - before;
+  if (result.added || sceneSweepAdded) builtAngle = null;
+  updateStatus(`pre-motion ${preMotionCount}`);
 }
 
 function sync(scene) {
-  fallbackDiscover(scene);
+  sweepRenderedScene(scene);
   syncStyleFromControls();
   if (!captureDone) return;
 
   if (builtAngle !== style.edgeAngle || (!edgeLines.length && retained.length)) rebuild();
 
-  // rim-glow-filter runs before this wrapper in the final render chain. Enforce
-  // dedicated ownership immediately before the actual WebGL draw.
+  // Generic architecture layers run before this wrapper in the render chain.
+  // Dedicated strip/path layers own these meshes immediately before WebGL draw.
   hideForeignLines();
 
   edgeMaterial.color.set(style.edgeColor);
@@ -390,3 +431,4 @@ window.__ADAM_DEDICATED_STRIP_STYLE = style;
 window.__ADAM_DEDICATED_STRIPS = () => retained;
 window.__ADAM_DEDICATED_STRIP_LINES = () => ({ edgeLines, innerGlowLines, outerGlowLines });
 window.__ADAM_DEDICATED_STRIP_CAPTURE_SOURCE = () => captureSource;
+window.__ADAM_DEDICATED_STRIP_SCENE_SWEEP_ADDED = () => sceneSweepAdded;
