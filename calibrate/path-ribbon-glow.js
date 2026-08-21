@@ -11,23 +11,27 @@ import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 
     Scene_1/Main_Group/paths/**
 
-  The current 10° rail treatment is user-confirmed working on the main bundle.
-  This revision deliberately DOES NOT change that rendering logic. It adds
-  runtime diagnostics so the remaining angled spur failure can be measured
-  instead of guessed at:
+  The 10° rail geometry is the user-confirmed working baseline and remains
+  unchanged. Depth and path-specific glow width now live HERE, on the actual
+  materials used by the ribbons, rather than in a later render wrapper. This
+  makes the presentation deterministic:
 
-    - per-ribbon rail count / segment count / visibility
-    - source-vs-rail world-box centre offset
-    - actual scene membership
-    - geometry UUID / shared-geometry count
-    - click-to-identify a visible path ribbon in the canvas
-
-  Colours/opacity/width still follow the normal Edge and Glow calibrator values;
-  only the path edge angle is independent.
+    - source path meshes and all three line layers obey scene depth;
+    - buildings can occlude paths;
+    - path glow is intentionally much tighter than building glow;
+    - the existing runtime audit / click-identify probe remains available for
+      the unresolved end-only spur cases.
 */
 
 const PATH_PREFIX = 'Scene_1/Main_Group/paths/';
 const DEFAULT_PATH_EDGE_ANGLE = 10;
+const INNER_GLOW_SCALE = 0.28;
+const OUTER_GLOW_SCALE = 0.50;
+const INNER_GLOW_MIN = 1.5;
+const INNER_GLOW_MAX = 2.5;
+const OUTER_GLOW_MIN = 2.4;
+const OUTER_GLOW_MAX = 4.0;
+
 const retained = [];
 const entries = [];
 let builtAngle = null;
@@ -40,7 +44,7 @@ let clickIdentifyEnabled = false;
 
 const edgeMaterial = new LineMaterial({
   transparent:true,
-  depthTest:false,
+  depthTest:true,
   depthWrite:false,
   blending:THREE.NormalBlending
 });
@@ -48,7 +52,7 @@ edgeMaterial.toneMapped = false;
 
 const innerGlowMaterial = new LineMaterial({
   transparent:true,
-  depthTest:false,
+  depthTest:true,
   depthWrite:false,
   blending:THREE.NormalBlending
 });
@@ -56,11 +60,15 @@ innerGlowMaterial.toneMapped = false;
 
 const outerGlowMaterial = new LineMaterial({
   transparent:true,
-  depthTest:false,
+  depthTest:true,
   depthWrite:false,
   blending:THREE.NormalBlending
 });
 outerGlowMaterial.toneMapped = false;
+
+function clamp(v, min, max) {
+  return Math.max(min, Math.min(max, v));
+}
 
 function pathOf(object) {
   const parts = [];
@@ -76,12 +84,26 @@ function shortPath(path) {
   return String(path || '').replace(PATH_PREFIX, '');
 }
 
+function eachMaterial(mesh, fn) {
+  if (Array.isArray(mesh.material)) mesh.material.forEach(fn);
+  else if (mesh.material) fn(mesh.material);
+}
+
+function enforceSourceDepth(mesh) {
+  mesh.renderOrder = 0;
+  eachMaterial(mesh, material => {
+    material.depthTest = true;
+    material.needsUpdate = true;
+  });
+}
+
 function capture(root) {
   retained.length = 0;
   root?.traverse?.(object => {
     if (!object?.isMesh || !object.geometry?.attributes?.position) return;
     const path = pathOf(object);
     if (!path.startsWith(PATH_PREFIX)) return;
+    if (retained.some(entry => entry.mesh === object)) return;
     retained.push({ mesh:object, originalPath:path });
   });
   console.info(`[ADAM path rails] captured ${retained.length} Main_Group/paths mesh(es).`);
@@ -170,6 +192,7 @@ function rebuild() {
   for (const retainedEntry of retained) {
     const source = retainedEntry.mesh;
     if (!source?.parent || !source.geometry?.attributes?.position) continue;
+    enforceSourceDepth(source);
 
     const result = railGeometryForMesh(source, angle);
     if (!result.geometry) continue;
@@ -184,9 +207,10 @@ function rebuild() {
       line.frustumCulled = false;
     }
 
-    outer.renderOrder = 90;
-    inner.renderOrder = 91;
-    edge.renderOrder = 92;
+    // Modest ordering only within the ribbon stack. Depth remains authoritative.
+    outer.renderOrder = 2;
+    inner.renderOrder = 3;
+    edge.renderOrder = 4;
 
     source.add(outer, inner, edge);
     entries.push({ source, outer, inner, edge, segments:result.segments });
@@ -239,18 +263,24 @@ function syncFromCalibrator() {
   const glowWidth = readControl('glowCtls', 'glowWidth', 7.0);
   const glowStrength = readControl('glowCtls', 'glowStrength', 0.55);
 
+  edgeMaterial.depthTest = true;
+  edgeMaterial.depthWrite = false;
   edgeMaterial.color.set(edgeColor);
   edgeMaterial.opacity = THREE.MathUtils.clamp(edgeOpacity, 0, 1);
   edgeMaterial.linewidth = Math.max(0.2, edgeWidth);
 
   const combined = THREE.MathUtils.clamp(glowOpacity * glowStrength, 0, 1);
+  innerGlowMaterial.depthTest = true;
+  innerGlowMaterial.depthWrite = false;
   innerGlowMaterial.color.set(glowColor);
   innerGlowMaterial.opacity = THREE.MathUtils.clamp(combined * 2.3, 0, 0.55);
-  innerGlowMaterial.linewidth = Math.max(1, glowWidth);
+  innerGlowMaterial.linewidth = clamp(glowWidth * INNER_GLOW_SCALE, INNER_GLOW_MIN, INNER_GLOW_MAX);
 
+  outerGlowMaterial.depthTest = true;
+  outerGlowMaterial.depthWrite = false;
   outerGlowMaterial.color.set(glowColor);
   outerGlowMaterial.opacity = THREE.MathUtils.clamp(combined * 0.9, 0, 0.24);
-  outerGlowMaterial.linewidth = Math.max(1.5, glowWidth * 1.9);
+  outerGlowMaterial.linewidth = clamp(glowWidth * OUTER_GLOW_SCALE, OUTER_GLOW_MIN, OUTER_GLOW_MAX);
 
   setResolution();
 
@@ -260,6 +290,7 @@ function syncFromCalibrator() {
   const edgeVisible = edgeButton ? edgeButton.classList.contains('on') : true;
 
   for (const entry of entries) {
+    enforceSourceDepth(entry.source);
     entry.outer.visible = glowVisible;
     entry.inner.visible = glowVisible;
     entry.edge.visible = edgeVisible;
@@ -386,10 +417,6 @@ async function copyAudit() {
   } catch {
     console.log(text);
   }
-}
-
-function auditRowForMesh(mesh) {
-  return auditRows().find(row => row.fullPath === mesh?.userData?.adamPathRailSource || row.fullPath === pathOf(mesh)) || null;
 }
 
 function identifyFromEvent(event) {
