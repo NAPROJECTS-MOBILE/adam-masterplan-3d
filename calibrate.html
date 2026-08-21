@@ -41,6 +41,14 @@
     <h2>Edges</h2><div id="edgeCtls"></div>
     <h2>Glow</h2><div id="glowCtls"></div>
 
+    <h2>Path ribbons</h2>
+    <div id="pathRibbonStatus" class="scroll-hint">waiting for path rail geometry…</div>
+    <div class="ctl">
+      <label>Path edge angle °<span id="pathEdgeAngleV" data-v>10°</span></label>
+      <input id="pathEdgeAngle" type="range" min="5" max="18" step="1" value="10">
+    </div>
+    <p class="scroll-hint">The path ribbons use their own shallow edge threshold. 10° keeps the longitudinal rails; the building edge angle remains independent.</p>
+
     <h2>Isometric dots</h2>
     <div class="row tog"><button id="tAnimate">Animate dots</button></div>
     <div id="dotCtls"></div>
@@ -73,7 +81,7 @@
   }
 }
 </script>
-<script type="module" src="./calibrate/path-ribbon-glow.js?v=mesh-ribbon-glow-20260821-1336"></script>
+<script type="module" src="./calibrate/path-ribbon-glow.js?v=path-rail-angle-10-20260821-1344"></script>
 <script type="module" src="./calibrate/rim-glow-filter.js?v=targets-72-20260821-1320"></script>
 <script type="module" src="./calibrate/glow-bootstrap.js?v=path-ribbon-glow-20260821-1336"></script>
 <script type="module" src="./calibrate/keyframe-add-unlock.js?v=20260820-1553"></script>
