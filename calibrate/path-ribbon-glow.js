@@ -9,9 +9,15 @@ import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
   ----------------------------
   The working main ribbon treatment stays unchanged.
 
-  Ten directly-identified spur meshes need a tiny world-up rail lift so their
-  fat glow fragments do not lose the depth test against the coplanar site plate.
-  This is intentionally applied ONLY to those exact GLB paths.
+  Ten directly-identified spur meshes have visible dark rails but their glow is
+  only surviving at the caps. That is a coplanar depth-fighting signature: the
+  fat glow quads fail depth against the ribbon/source surface along the length,
+  while their round caps extend outside it and remain visible.
+
+  Fix only those exact meshes by giving their glow materials a negative polygon
+  depth bias. The dark edge, the main ribbons, camera, motion and building glow
+  remain unchanged, and depth testing stays ON so buildings can still occlude
+  the spur glow correctly.
 */
 
 const PATH_PREFIX = 'Scene_1/Main_Group/paths/';
@@ -22,7 +28,6 @@ const INNER_GLOW_MIN = 1.5;
 const INNER_GLOW_MAX = 2.5;
 const OUTER_GLOW_MIN = 2.4;
 const OUTER_GLOW_MAX = 4.0;
-const SPUR_WORLD_LIFT = 0.003;
 
 const SPUR_FIX_PATHS = new Set([
   'Scene_1/Main_Group/Rectangle',
@@ -42,29 +47,30 @@ const entries = [];
 let initialized = false;
 let totalRailSegments = 0;
 
-const edgeMaterial = new LineMaterial({
-  transparent:true,
-  depthTest:true,
-  depthWrite:false,
-  blending:THREE.NormalBlending
-});
-edgeMaterial.toneMapped = false;
+function makeLineMaterial({ depthBias = false } = {}) {
+  const material = new LineMaterial({
+    transparent:true,
+    depthTest:true,
+    depthWrite:false,
+    blending:THREE.NormalBlending
+  });
+  material.toneMapped = false;
+  if (depthBias) {
+    // LineSegments2 is rendered as fat triangle quads, so polygon offset applies
+    // to the whole glow body, unlike a world-space lift which depends on author
+    // orientation/transforms.
+    material.polygonOffset = true;
+    material.polygonOffsetFactor = -4;
+    material.polygonOffsetUnits = -4;
+  }
+  return material;
+}
 
-const innerGlowMaterial = new LineMaterial({
-  transparent:true,
-  depthTest:true,
-  depthWrite:false,
-  blending:THREE.NormalBlending
-});
-innerGlowMaterial.toneMapped = false;
-
-const outerGlowMaterial = new LineMaterial({
-  transparent:true,
-  depthTest:true,
-  depthWrite:false,
-  blending:THREE.NormalBlending
-});
-outerGlowMaterial.toneMapped = false;
+const edgeMaterial = makeLineMaterial();
+const innerGlowMaterial = makeLineMaterial();
+const outerGlowMaterial = makeLineMaterial();
+const spurInnerGlowMaterial = makeLineMaterial({ depthBias:true });
+const spurOuterGlowMaterial = makeLineMaterial({ depthBias:true });
 
 function clamp(v, min, max) {
   return Math.max(min, Math.min(max, v));
@@ -119,7 +125,6 @@ function capture(root) {
   );
 }
 
-// Capture exact references before app-v2 classifies/reparents anything.
 const originalLoadAsync = GLTFLoader.prototype.loadAsync;
 GLTFLoader.prototype.loadAsync = async function adamCapturePathRails(...args) {
   try {
@@ -194,17 +199,6 @@ function pathAngle() {
   return Number.isFinite(value) ? value : DEFAULT_PATH_EDGE_ANGLE;
 }
 
-// Convert a tiny world-Y lift into the source mesh's local coordinates so the
-// fix remains correct for rotated/scaled clone nodes while staying parented to
-// the real ribbon mesh and following all existing motion.
-function localOffsetForWorldLift(source, amount) {
-  source.updateWorldMatrix(true, false);
-  const inverse = source.matrixWorld.clone().invert();
-  const a = new THREE.Vector3(0, 0, 0).applyMatrix4(inverse);
-  const b = new THREE.Vector3(0, amount, 0).applyMatrix4(inverse);
-  return b.sub(a);
-}
-
 function hideCompetingDirectLines(source) {
   for (const child of source.children) {
     if (!child?.isLineSegments2 || child.userData?.adamPathRailLayer) continue;
@@ -224,8 +218,10 @@ function rebuild() {
     const result = railGeometryForMesh(source, angle);
     if (!result.geometry) continue;
 
-    const outer = new LineSegments2(result.geometry, outerGlowMaterial);
-    const inner = new LineSegments2(result.geometry.clone(), innerGlowMaterial);
+    const outerMat = retainedEntry.spurFix ? spurOuterGlowMaterial : outerGlowMaterial;
+    const innerMat = retainedEntry.spurFix ? spurInnerGlowMaterial : innerGlowMaterial;
+    const outer = new LineSegments2(result.geometry, outerMat);
+    const inner = new LineSegments2(result.geometry.clone(), innerMat);
     const edge = new LineSegments2(result.geometry.clone(), edgeMaterial);
 
     for (const line of [outer, inner, edge]) {
@@ -240,14 +236,7 @@ function rebuild() {
     edge.renderOrder = 4;
 
     source.add(outer, inner, edge);
-
-    if (retainedEntry.spurFix) {
-      const localLift = localOffsetForWorldLift(source, SPUR_WORLD_LIFT);
-      outer.position.copy(localLift);
-      inner.position.copy(localLift);
-      edge.position.copy(localLift);
-      hideCompetingDirectLines(source);
-    }
+    if (retainedEntry.spurFix) hideCompetingDirectLines(source);
 
     entries.push({
       source,
@@ -267,7 +256,7 @@ function rebuild() {
   const fixed = entries.filter(entry => entry.spurFix).length;
   console.info(
     `[ADAM path rails] ${entries.length}/${retained.length} ribbons · ` +
-    `${totalRailSegments} longitudinal segments · ${fixed} targeted spur fixes.`
+    `${totalRailSegments} longitudinal segments · ${fixed} targeted spur depth biases.`
   );
 }
 
@@ -291,9 +280,21 @@ function setResolution() {
   const r = root?.getBoundingClientRect?.();
   const w = Math.max(1, Math.round(r?.width || 1));
   const h = Math.max(1, Math.round(r?.height || 1));
-  edgeMaterial.resolution.set(w, h);
-  innerGlowMaterial.resolution.set(w, h);
-  outerGlowMaterial.resolution.set(w, h);
+  for (const material of [
+    edgeMaterial,
+    innerGlowMaterial,
+    outerGlowMaterial,
+    spurInnerGlowMaterial,
+    spurOuterGlowMaterial
+  ]) material.resolution.set(w, h);
+}
+
+function syncGlowMaterial(material, color, opacity, width) {
+  material.depthTest = true;
+  material.depthWrite = false;
+  material.color.set(color);
+  material.opacity = opacity;
+  material.linewidth = width;
 }
 
 function syncFromCalibrator() {
@@ -314,17 +315,15 @@ function syncFromCalibrator() {
   edgeMaterial.linewidth = Math.max(0.2, edgeWidth);
 
   const combined = THREE.MathUtils.clamp(glowOpacity * glowStrength, 0, 1);
-  innerGlowMaterial.depthTest = true;
-  innerGlowMaterial.depthWrite = false;
-  innerGlowMaterial.color.set(glowColor);
-  innerGlowMaterial.opacity = THREE.MathUtils.clamp(combined * 2.3, 0, 0.55);
-  innerGlowMaterial.linewidth = clamp(glowWidth * INNER_GLOW_SCALE, INNER_GLOW_MIN, INNER_GLOW_MAX);
+  const innerOpacity = THREE.MathUtils.clamp(combined * 2.3, 0, 0.55);
+  const outerOpacity = THREE.MathUtils.clamp(combined * 0.9, 0, 0.24);
+  const innerWidth = clamp(glowWidth * INNER_GLOW_SCALE, INNER_GLOW_MIN, INNER_GLOW_MAX);
+  const outerWidth = clamp(glowWidth * OUTER_GLOW_SCALE, OUTER_GLOW_MIN, OUTER_GLOW_MAX);
 
-  outerGlowMaterial.depthTest = true;
-  outerGlowMaterial.depthWrite = false;
-  outerGlowMaterial.color.set(glowColor);
-  outerGlowMaterial.opacity = THREE.MathUtils.clamp(combined * 0.9, 0, 0.24);
-  outerGlowMaterial.linewidth = clamp(glowWidth * OUTER_GLOW_SCALE, OUTER_GLOW_MIN, OUTER_GLOW_MAX);
+  syncGlowMaterial(innerGlowMaterial, glowColor, innerOpacity, innerWidth);
+  syncGlowMaterial(outerGlowMaterial, glowColor, outerOpacity, outerWidth);
+  syncGlowMaterial(spurInnerGlowMaterial, glowColor, innerOpacity, innerWidth);
+  syncGlowMaterial(spurOuterGlowMaterial, glowColor, outerOpacity, outerWidth);
 
   setResolution();
 
