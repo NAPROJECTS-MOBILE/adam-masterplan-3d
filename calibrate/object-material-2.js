@@ -281,8 +281,6 @@ function waitForUI() {
 }
 requestAnimationFrame(waitForUI);
 
-// Keep a renderer-level reassertion as a second safety net. The per-mesh
-// onBeforeRender callback above is the authoritative last write before draw.
 const previousRender = THREE.WebGLRenderer.prototype.render;
 THREE.WebGLRenderer.prototype.render = function adamMaterial2Render(scene, camera) {
   applyMaterial2();
