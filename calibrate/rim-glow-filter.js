@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { LineSegments2 } from 'three/addons/lines/LineSegments2.js';
 import { LineSegmentsGeometry } from 'three/addons/lines/LineSegmentsGeometry.js';
-import { FORCE_GLOW_PATHS } from './glow-targets.js?v=67-20260820-1235';
+import { FORCE_GLOW_PATHS } from './glow-targets.js?v=72-strip-glow-20260821-0048';
 
 /*
   ADAM edge + rim-glow policy
