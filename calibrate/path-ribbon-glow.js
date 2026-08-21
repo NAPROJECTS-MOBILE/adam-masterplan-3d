@@ -7,19 +7,20 @@ import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 /*
   ADAM path-ribbon edge + glow
   ----------------------------
-  The foreground rails are real ribbon meshes under:
+  Foreground rails are real ribbon meshes under:
 
     Scene_1/Main_Group/paths/**
 
-  Their rounded profile has shallow dihedral angles. At the building default of
-  30 degrees, EdgesGeometry discards the lengthwise rails and leaves mainly the
-  true boundary/end-cap segments — exactly the bright terminal dots we saw.
+  The current 10° rail treatment is user-confirmed working on the main bundle.
+  This revision deliberately DOES NOT change that rendering logic. It adds
+  runtime diagnostics so the remaining angled spur failure can be measured
+  instead of guessed at:
 
-  The path ribbons therefore get their OWN EdgesGeometry threshold (default 10°)
-  while staying out of app-v2's building `solids` population. We additionally
-  filter the generated edges to keep segments running predominantly along the
-  ribbon's longest local axis. That removes the short end-cap/cross-profile
-  segments completely, so glow cannot accumulate into dots at ribbon ends.
+    - per-ribbon rail count / segment count / visibility
+    - source-vs-rail world-box centre offset
+    - actual scene membership
+    - geometry UUID / shared-geometry count
+    - click-to-identify a visible path ribbon in the canvas
 
   Colours/opacity/width still follow the normal Edge and Glow calibrator values;
   only the path edge angle is independent.
@@ -32,6 +33,10 @@ const entries = [];
 let builtAngle = null;
 let initialized = false;
 let totalRailSegments = 0;
+let lastRenderer = null;
+let lastScene = null;
+let lastCamera = null;
+let clickIdentifyEnabled = false;
 
 const edgeMaterial = new LineMaterial({
   transparent:true,
@@ -67,6 +72,10 @@ function pathOf(object) {
   return parts.reverse().join('/');
 }
 
+function shortPath(path) {
+  return String(path || '').replace(PATH_PREFIX, '');
+}
+
 function capture(root) {
   retained.length = 0;
   root?.traverse?.(object => {
@@ -91,10 +100,6 @@ GLTFLoader.prototype.loadAsync = async function adamCapturePathRails(...args) {
     GLTFLoader.prototype.loadAsync = originalLoadAsync;
   }
 };
-
-function component(v, axis) {
-  return axis === 0 ? v.x : axis === 1 ? v.y : v.z;
-}
 
 function longestAxisOf(mesh) {
   mesh.geometry.computeBoundingBox();
@@ -125,9 +130,6 @@ function railGeometryForMesh(mesh, angle) {
     const along = d[lengthAxis];
     const across = Math.max(d[(lengthAxis + 1) % 3], d[(lengthAxis + 2) % 3]);
 
-    // Keep longitudinal rail segments; reject end caps / cross-profile strokes.
-    // A mild ratio allows shallow bends while still eliminating near-perpendicular
-    // terminal segments.
     if (along < across * 0.65) continue;
 
     kept.push(
@@ -264,10 +266,170 @@ function syncFromCalibrator() {
   }
 }
 
-function updateStatus() {
+function updateStatus(extra = '') {
   const status = document.getElementById('pathRibbonStatus');
   if (status) {
-    status.textContent = `${entries.length}/${retained.length} ribbons · ${totalRailSegments} rail segments · ${pathAngle()}°`;
+    status.textContent = `${entries.length}/${retained.length} ribbons · ${totalRailSegments} rail segments · ${pathAngle()}°${extra ? ` · ${extra}` : ''}`;
+  }
+}
+
+function sourceWorldBox(mesh) {
+  mesh.geometry.computeBoundingBox();
+  if (!mesh.geometry.boundingBox) return new THREE.Box3();
+  mesh.updateWorldMatrix(true, false);
+  return mesh.geometry.boundingBox.clone().applyMatrix4(mesh.matrixWorld);
+}
+
+function railWorldBox(rails) {
+  const box = new THREE.Box3();
+  for (const rail of rails) {
+    rail.updateWorldMatrix(true, false);
+    box.expandByObject(rail);
+  }
+  return box;
+}
+
+function rootOf(object) {
+  let node = object;
+  while (node?.parent) node = node.parent;
+  return node || null;
+}
+
+function lineSegmentCount(line) {
+  const g = line?.geometry;
+  const instanceStart = g?.attributes?.instanceStart;
+  if (instanceStart?.count != null) return instanceStart.count;
+  const pos = g?.attributes?.position;
+  return pos?.count ? Math.floor(pos.count / 2) : 0;
+}
+
+function geometryShareCounts() {
+  const counts = new Map();
+  for (const { mesh } of retained) {
+    const uuid = mesh.geometry?.uuid || '(none)';
+    counts.set(uuid, (counts.get(uuid) || 0) + 1);
+  }
+  return counts;
+}
+
+function auditRows() {
+  const shareCounts = geometryShareCounts();
+  return retained.map(({ mesh, originalPath }) => {
+    const rails = mesh.children.filter(child => child.userData?.adamPathRailLayer);
+    const sourceBox = sourceWorldBox(mesh);
+    const rBox = railWorldBox(rails);
+    const railBoxEmpty = !rails.length || rBox.isEmpty();
+    const sourceCentre = sourceBox.getCenter(new THREE.Vector3());
+    const railCentre = railBoxEmpty ? new THREE.Vector3() : rBox.getCenter(new THREE.Vector3());
+    const centreOffset = railBoxEmpty ? -1 : sourceCentre.distanceTo(railCentre);
+    const root = rootOf(mesh);
+    const inScene = !!root?.isScene;
+    const uuid = mesh.geometry?.uuid || '(none)';
+    const builtEntry = entries.find(entry => entry.source === mesh);
+
+    return {
+      name: shortPath(originalPath),
+      fullPath: originalPath,
+      rails: rails.length,
+      segments: builtEntry?.segments ?? lineSegmentCount(rails[0]),
+      visible: rails.map(r => r.visible),
+      railBoxEmpty,
+      centreOffset:Number(centreOffset.toFixed(5)),
+      meshVisible:mesh.visible,
+      inScene,
+      isInstancedMesh:!!mesh.isInstancedMesh,
+      geometryUuid:uuid,
+      geometrySharedBy:shareCounts.get(uuid) || 1,
+      position:[mesh.position.x, mesh.position.y, mesh.position.z].map(v => Number(v.toFixed(5)))
+    };
+  });
+}
+
+function suspiciousRows(rows) {
+  return rows.filter(row =>
+    row.rails !== 3 ||
+    row.segments <= 0 ||
+    row.railBoxEmpty ||
+    row.centreOffset < 0 ||
+    row.centreOffset > 0.25 ||
+    !row.meshVisible ||
+    !row.inScene
+  );
+}
+
+function renderAudit() {
+  const rows = auditRows();
+  const bad = suspiciousRows(rows);
+  console.group(`[ADAM path rail runtime audit] ${bad.length} suspicious / ${rows.length} ribbons`);
+  console.table(rows);
+  console.groupEnd();
+
+  const probe = document.getElementById('pathRibbonProbe');
+  if (probe) {
+    if (!bad.length) {
+      probe.textContent = `Runtime audit: all ${rows.length} retained ribbons have 3 rail layers in-scene with non-empty geometry. Click-identify one of the visually failing angled spurs so we can inspect its exact runtime row.`;
+    } else {
+      probe.textContent = `Runtime audit found ${bad.length} suspicious ribbon(s): ${bad.map(r => r.name).join(', ')}`;
+    }
+  }
+  updateStatus(`${bad.length} runtime anomalies`);
+  return rows;
+}
+
+async function copyAudit() {
+  const rows = auditRows();
+  const text = JSON.stringify(rows, null, 2);
+  try {
+    await navigator.clipboard.writeText(text);
+    const probe = document.getElementById('pathRibbonProbe');
+    if (probe) probe.textContent = `Copied runtime audit for ${rows.length} ribbons.`;
+  } catch {
+    console.log(text);
+  }
+}
+
+function auditRowForMesh(mesh) {
+  return auditRows().find(row => row.fullPath === mesh?.userData?.adamPathRailSource || row.fullPath === pathOf(mesh)) || null;
+}
+
+function identifyFromEvent(event) {
+  if (!clickIdentifyEnabled || !lastRenderer || !lastCamera || !lastScene) return;
+  const canvas = lastRenderer.domElement;
+  if (!canvas || event.target !== canvas) return;
+
+  const rect = canvas.getBoundingClientRect();
+  const pointer = new THREE.Vector2(
+    ((event.clientX - rect.left) / rect.width) * 2 - 1,
+    -((event.clientY - rect.top) / rect.height) * 2 + 1
+  );
+  const raycaster = new THREE.Raycaster();
+  raycaster.params.Line2 = { threshold:10 };
+  raycaster.setFromCamera(pointer, lastCamera);
+
+  const candidates = [
+    ...retained.map(entry => entry.mesh),
+    ...entries.flatMap(entry => [entry.outer, entry.inner, entry.edge])
+  ];
+  const hit = raycaster.intersectObjects(candidates, false)[0];
+  const probe = document.getElementById('pathRibbonProbe');
+  if (!hit) {
+    if (probe) probe.textContent = 'Click probe: no path ribbon hit. Try clicking directly on the visible spur mesh.';
+    return;
+  }
+
+  let source = hit.object;
+  if (hit.object.userData?.adamPathRailLayer) {
+    const sourcePath = hit.object.userData.adamPathRailSource;
+    source = retained.find(entry => entry.originalPath === sourcePath)?.mesh || hit.object.parent;
+  }
+  const row = auditRows().find(item => item.fullPath === pathOf(source));
+  const label = row?.name || shortPath(pathOf(source));
+  console.info('[ADAM path click probe]', row || { path:pathOf(source), hit:hit.object });
+
+  if (probe) {
+    probe.textContent = row
+      ? `CLICK: ${label} · rails ${row.rails} · segs ${row.segments} · centre offset ${row.centreOffset} · shared geometry ×${row.geometrySharedBy} · visible ${row.visible.join('/')}`
+      : `CLICK: ${label} · no audit row found`;
   }
 }
 
@@ -284,6 +446,17 @@ function bindControls() {
     });
     paint();
   }
+
+  document.getElementById('pathRailAuditBtn')?.addEventListener('click', renderAudit);
+  document.getElementById('pathRailCopyBtn')?.addEventListener('click', copyAudit);
+  document.getElementById('pathRailIdentifyBtn')?.addEventListener('click', event => {
+    clickIdentifyEnabled = !clickIdentifyEnabled;
+    event.currentTarget.classList.toggle('on', clickIdentifyEnabled);
+    event.currentTarget.textContent = clickIdentifyEnabled ? 'Click identify: ON' : 'Click identify';
+    const probe = document.getElementById('pathRibbonProbe');
+    if (probe && clickIdentifyEnabled) probe.textContent = 'Click-identify is ON. Click one of the visually failing angled spur strips in the canvas.';
+  });
+  document.addEventListener('click', identifyFromEvent, true);
 
   document.getElementById('edgeCtls')?.addEventListener('input', syncFromCalibrator);
   document.getElementById('glowCtls')?.addEventListener('input', syncFromCalibrator);
@@ -317,6 +490,19 @@ function waitForAppControls() {
   else console.warn('[ADAM path rails] app-v2 controls never became ready.');
 }
 
+// Capture live scene/camera/renderer references without changing the render.
+// rim-glow-filter loads after this module and wraps this function, so both hooks
+// remain active in the normal render chain.
+const previousRender = THREE.WebGLRenderer.prototype.render;
+THREE.WebGLRenderer.prototype.render = function adamPathRailProbeRender(scene, camera) {
+  lastRenderer = this;
+  lastScene = scene;
+  lastCamera = camera;
+  return previousRender.call(this, scene, camera);
+};
+
 window.__ADAM_PATH_RIBBON_REFS = retained;
 window.__ADAM_PATH_RAIL_LAYERS = entries;
 window.__ADAM_REBUILD_PATH_RAILS = rebuild;
+window.__ADAM_PATH_RAIL_AUDIT = renderAudit;
+window.__ADAM_PATH_RAIL_AUDIT_ROWS = auditRows;
