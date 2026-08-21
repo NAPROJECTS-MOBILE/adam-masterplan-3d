@@ -47,13 +47,13 @@
       <label>Path edge angle °<span id="pathEdgeAngleV" data-v>10°</span></label>
       <input id="pathEdgeAngle" type="range" min="5" max="18" step="1" value="10">
     </div>
-    <p class="scroll-hint">The working 10° path geometry is unchanged. Depth testing and tighter path-only glow are now applied directly by the ribbon renderer itself.</p>
+    <p class="scroll-hint">The working 10° path geometry is unchanged. Depth testing and tighter path-only glow are applied directly by the ribbon renderer.</p>
     <div class="row tog">
       <button id="pathRailAuditBtn">Run rail audit</button>
       <button id="pathRailIdentifyBtn">Click identify</button>
       <button id="pathRailCopyBtn">Copy audit</button>
     </div>
-    <p id="pathRibbonProbe" class="scroll-hint">If any spur still shows end-only glow, turn on Click identify and click that exact spur.</p>
+    <p id="pathRibbonProbe" class="scroll-hint">Click identify now uses a nearest-screen-space fallback, so you only need to click near a tiny spur/end dot rather than hit the geometry exactly.</p>
 
     <h2>Isometric dots</h2>
     <div class="row tog"><button id="tAnimate">Animate dots</button></div>
@@ -90,6 +90,7 @@
 <script type="module" src="./calibrate/path-ribbon-glow.js?v=direct-depth-tight-glow-20260821-1451"></script>
 <script type="module" src="./calibrate/rim-glow-filter.js?v=targets-72-20260821-1320"></script>
 <script type="module" src="./calibrate/glow-bootstrap.js?v=path-ribbon-glow-20260821-1336"></script>
+<script type="module" src="./calibrate/path-ribbon-nearest-probe.js?v=nearest-spur-probe-20260821-1506"></script>
 <script type="module" src="./calibrate/keyframe-add-unlock.js?v=20260820-1553"></script>
 <script type="module" src="./calibrate/responsive-keyframes.js?v=20260820-2312"></script>
 <script type="module" src="./calibrate/rgb-color-controls.js?v=20260821-0004"></script>
