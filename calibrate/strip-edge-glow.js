@@ -5,26 +5,31 @@ import { LineSegmentsGeometry } from 'three/addons/lines/LineSegmentsGeometry.js
 import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 
 /*
-  ADAM dedicated strip edge + glow
-  --------------------------------
-  Completely separate from the building edge/glow system.
+  ADAM dedicated strip edge + glow v3
+  -----------------------------------
+  Separate from the building edge/glow system.
 
-  Key fixes in this version:
-    - strip detection is orientation-invariant: it uses LOCAL geometry extents,
-      not world Y, so rotated/re-parented strip geometry cannot fall out of the
-      selector simply because its thin axis is X or Z instead of Y;
-    - the strip glow uses normal alpha blending rather than additive blending.
-      Additive green over the almost-white site plate can wash toward white and
-      look like "no glow". Normal blending visibly tints the light background;
-    - every retained strip gets its own edge, inner glow and outer halo, attached
-      directly to the exact mesh object captured before spline-motion runs;
-    - generic building edge/glow lines attached to a dedicated strip are hidden,
-      so this module is the single owner of the strip treatment.
+  The important correction here is TARGETING. Previous versions only searched
+  under Main_Group/clusters, but app-v2's own `pathMeshes` are built from ALL
+  flat meshes in the model (minus the primary slab). The long landscape strips
+  can therefore live outside the clusters subtree and never enter the dedicated
+  strip system at all.
+
+  This version mirrors the real path-mesh idea instead:
+    - capture every horizontal, planar, elongated non-base mesh in the GLB,
+      regardless of hierarchy path;
+    - keep the five known thin targets as unconditional inclusions;
+    - exclude the giant site/base plate explicitly;
+    - attach a private edge + inner glow + outer halo directly to the exact mesh;
+    - hide competing generic line children on those meshes;
+    - fall back to discovering candidates from the rendered scene if the loader
+      hook ever misses, so the dedicated system cannot silently do nothing.
 */
 
-const CLUSTER_PREFIX = 'Scene_1/Main_Group/clusters/';
-const STRIP_ASPECT = 4.0;
-const PLANAR_RATIO = 0.025;
+const FLAT_WORLD_HEIGHT = 0.16;
+const MIN_ASPECT = 1.8;
+const PLANAR_RATIO = 0.06;
+const HUGE_BASE_SIZE = 900;
 
 const EXPLICIT_STRIP_PATHS = new Set([
   'Scene_1/Main_Group/clusters/cluster_2/Rectangle_2_5',
@@ -40,10 +45,10 @@ const style = {
   edgeWidth:1.2,
   edgeAngle:30,
   glowColor:'#86bf40',
-  glowOpacity:0.58,
-  glowWidth:8.0,
-  haloOpacity:0.22,
-  haloWidth:22.0,
+  glowOpacity:0.68,
+  glowWidth:9.0,
+  haloOpacity:0.26,
+  haloWidth:24.0,
   expansion:0.0025,
   edgesVisible:true,
   glowVisible:true
@@ -59,22 +64,17 @@ function pathOf(object) {
   return parts.reverse().join('/');
 }
 
-function localGeometrySize(mesh) {
+function localMetrics(mesh) {
   mesh.geometry.computeBoundingBox();
   const bb = mesh.geometry.boundingBox;
   if (!bb) return null;
-  return bb.getSize(new THREE.Vector3());
-}
-
-function stripMetrics(mesh) {
-  const size = localGeometrySize(mesh);
-  if (!size) return null;
-  const dims = [Math.abs(size.x), Math.abs(size.y), Math.abs(size.z)].sort((a,b) => a-b);
+  const localSize = bb.getSize(new THREE.Vector3());
+  const dims = [Math.abs(localSize.x), Math.abs(localSize.y), Math.abs(localSize.z)].sort((a,b) => a-b);
   const thin = dims[0];
   const width = Math.max(dims[1], 1e-6);
   const length = Math.max(dims[2], 1e-6);
   return {
-    size,
+    localSize,
     thin,
     width,
     length,
@@ -83,62 +83,72 @@ function stripMetrics(mesh) {
   };
 }
 
-function isAutoStrip(mesh) {
-  const m = stripMetrics(mesh);
-  if (!m) return false;
-  return m.planarRatio <= PLANAR_RATIO && m.aspect >= STRIP_ASPECT;
+function worldSizeOf(mesh) {
+  mesh.updateWorldMatrix?.(true, false);
+  return new THREE.Box3().setFromObject(mesh).getSize(new THREE.Vector3());
+}
+
+function isHugeBase(metrics) {
+  return metrics && metrics.length >= HUGE_BASE_SIZE && metrics.width >= HUGE_BASE_SIZE;
+}
+
+function qualifies(mesh, originalPath = pathOf(mesh)) {
+  const explicit = EXPLICIT_STRIP_PATHS.has(originalPath);
+  const metrics = localMetrics(mesh);
+  if (!metrics) return null;
+
+  const worldSize = worldSizeOf(mesh);
+  const horizontalFlat = Math.abs(worldSize.y) <= FLAT_WORLD_HEIGHT;
+  const planar = metrics.planarRatio <= PLANAR_RATIO;
+  const elongated = metrics.aspect >= MIN_ASPECT;
+  const hugeBase = isHugeBase(metrics);
+
+  if (!explicit && !(horizontalFlat && planar && elongated && !hugeBase)) return null;
+  return { explicit, metrics, worldSize };
 }
 
 let retained = [];
 let captureDone = false;
+let builtAngle = null;
+let uiInstalled = false;
+let countReadout = null;
 
-function captureStrips(root) {
+function addRetained(mesh, originalPath, data) {
+  if (!mesh || retained.some(entry => entry.mesh === mesh)) return false;
+  mesh.userData.adamDedicatedStrip = true;
+  mesh.userData.adamDedicatedStripOriginalPath = originalPath;
+  retained.push({ mesh, originalPath, ...data });
+  return true;
+}
+
+function captureStrips(root, source = 'loader') {
   const foundExplicit = new Set();
-  const picked = [];
+  let added = 0;
+  root?.updateWorldMatrix?.(true, true);
 
   root?.traverse?.(mesh => {
     if (!mesh?.isMesh || mesh.isLineSegments2 || !mesh.geometry?.attributes?.position) return;
     const originalPath = pathOf(mesh);
-    if (!originalPath.startsWith(CLUSTER_PREFIX)) return;
-
-    const explicit = EXPLICIT_STRIP_PATHS.has(originalPath);
-    const metrics = stripMetrics(mesh);
-    const automatic = metrics && metrics.planarRatio <= PLANAR_RATIO && metrics.aspect >= STRIP_ASPECT;
-    if (!explicit && !automatic) return;
-
-    if (explicit) foundExplicit.add(originalPath);
-    mesh.userData.adamDedicatedStrip = true;
-    mesh.userData.adamDedicatedStripOriginalPath = originalPath;
-    picked.push({ mesh, originalPath, explicit, metrics });
+    const data = qualifies(mesh, originalPath);
+    if (!data) return;
+    if (data.explicit) foundExplicit.add(originalPath);
+    if (addRetained(mesh, originalPath, data)) added++;
   });
 
-  retained = picked;
   captureDone = true;
-
+  builtAngle = null;
   console.info(
-    `[ADAM dedicated strips v2] retained ${retained.length} strip mesh object(s) before motion; ` +
+    `[ADAM dedicated strips v3] ${source}: added ${added}, retained ${retained.length}; ` +
     `explicit ${foundExplicit.size}/${EXPLICIT_STRIP_PATHS.size}`
   );
-  if (retained.length) {
-    console.table(retained.map(entry => ({
-      path:entry.originalPath,
-      explicit:entry.explicit,
-      aspect:Number(entry.metrics?.aspect?.toFixed?.(2) ?? 0),
-      planarRatio:Number(entry.metrics?.planarRatio?.toFixed?.(5) ?? 0)
-    })));
-  }
-
-  const missing = [...EXPLICIT_STRIP_PATHS].filter(path => !foundExplicit.has(path));
-  if (missing.length) console.warn('[ADAM dedicated strips v2] explicit targets not found:', missing);
 }
 
-// Installed before glow-bootstrap/app-v2 so object references are captured from
-// the pristine GLB before spline-motion can move or re-parent anything.
+// Primary capture: pristine GLB before spline-motion reparents anything.
 const originalLoadAsync = GLTFLoader.prototype.loadAsync;
 GLTFLoader.prototype.loadAsync = async function adamCaptureDedicatedStrips(...args) {
   try {
     const gltf = await originalLoadAsync.apply(this, args);
-    captureStrips(gltf?.scene);
+    captureStrips(gltf?.scene, 'pre-motion');
     return gltf;
   } finally {
     GLTFLoader.prototype.loadAsync = originalLoadAsync;
@@ -153,8 +163,6 @@ const edgeMaterial = new LineMaterial({
 });
 edgeMaterial.toneMapped = false;
 
-// Deliberately normal-blended. On the light site plate this produces an actual
-// green halo instead of additive blending clipping/washing toward white.
 const innerGlowMaterial = new LineMaterial({
   transparent:true,
   depthTest:false,
@@ -174,9 +182,6 @@ outerGlowMaterial.toneMapped = false;
 const edgeLines = [];
 const innerGlowLines = [];
 const outerGlowLines = [];
-let builtAngle = null;
-let uiInstalled = false;
-let countReadout = null;
 
 function clearLines(lines) {
   for (const line of lines) {
@@ -218,9 +223,9 @@ function addLine(entry, geometry, material, target, kind, renderOrder, instanceM
 }
 
 function addTriplet(entry, geometry, instanceMatrix = null) {
-  addLine(entry, geometry, outerGlowMaterial, outerGlowLines, 'outer-halo', 40, instanceMatrix);
-  addLine(entry, geometry, innerGlowMaterial, innerGlowLines, 'inner-glow', 41, instanceMatrix);
-  addLine(entry, geometry, edgeMaterial, edgeLines, 'edge', 42, instanceMatrix);
+  addLine(entry, geometry, outerGlowMaterial, outerGlowLines, 'outer-halo', 60, instanceMatrix);
+  addLine(entry, geometry, innerGlowMaterial, innerGlowLines, 'inner-glow', 61, instanceMatrix);
+  addLine(entry, geometry, edgeMaterial, edgeLines, 'edge', 62, instanceMatrix);
 }
 
 function rebuild() {
@@ -248,12 +253,10 @@ function rebuild() {
   }
 
   builtAngle = style.edgeAngle;
-  if (countReadout) {
-    countReadout.textContent = `${retained.length} strip meshes · ${innerGlowLines.length} glow layers`;
-  }
+  updateReadout();
   console.info(
-    `[ADAM dedicated strips v2] built ${edgeLines.length} edge + ${innerGlowLines.length} inner glow + ` +
-    `${outerGlowLines.length} outer halo layer(s); empty edge geometry=${emptyGeometry}`
+    `[ADAM dedicated strips v3] built ${edgeLines.length} edge + ${innerGlowLines.length} inner + ` +
+    `${outerGlowLines.length} halo layer(s); empty geometry=${emptyGeometry}`
   );
 }
 
@@ -287,6 +290,13 @@ function hideForeignLinesOnStrips() {
   }
 }
 
+function updateReadout() {
+  if (!countReadout) return;
+  const sample = retained.slice(0, 4).map(entry => entry.mesh.name || '(unnamed)').join(', ');
+  countReadout.textContent = `${retained.length} strip meshes · ${innerGlowLines.length} glow layers` +
+    (sample ? ` · e.g. ${sample}` : '');
+}
+
 function installUI() {
   if (uiInstalled) return;
   const dotHeading = [...document.querySelectorAll('#panel > h2')]
@@ -298,7 +308,7 @@ function installUI() {
 
   countReadout = document.createElement('div');
   countReadout.className = 'scroll-hint';
-  countReadout.textContent = `${retained.length} strip meshes captured`;
+  updateReadout();
 
   const host = document.createElement('div');
   host.id = 'stripGlowCtls';
@@ -381,13 +391,21 @@ function installUI() {
   uiInstalled = true;
 }
 
-function sync() {
+let fallbackDiscoveryDone = false;
+function fallbackDiscover(scene) {
+  if (fallbackDiscoveryDone) return;
+  fallbackDiscoveryDone = true;
+  const before = retained.length;
+  captureStrips(scene, 'first-render fallback');
+  if (retained.length !== before) builtAngle = null;
+}
+
+function sync(scene) {
   installUI();
+  fallbackDiscover(scene);
   if (!captureDone) return;
   if (builtAngle !== style.edgeAngle || (!edgeLines.length && retained.length)) rebuild();
 
-  // Generic building passes run before this wrapper in the render chain. Hide
-  // their lines on dedicated strips every frame so this dedicated treatment wins.
   hideForeignLinesOnStrips();
 
   edgeMaterial.color.set(style.edgeColor);
@@ -418,12 +436,9 @@ function sync() {
   for (const line of edgeLines) line.visible = style.edgesVisible;
 }
 
-// strip-edge-glow loads before rim-glow-filter. The rim wrapper later calls this
-// wrapper as its previous render function, so this sync runs after the generic
-// rim sync and gets the final say over dedicated strip visibility/materials.
 const previousRender = THREE.WebGLRenderer.prototype.render;
 THREE.WebGLRenderer.prototype.render = function render(scene, camera) {
-  sync();
+  sync(scene);
   return previousRender.call(this, scene, camera);
 };
 
