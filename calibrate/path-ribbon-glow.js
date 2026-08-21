@@ -1,35 +1,61 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { LineSegments2 } from 'three/addons/lines/LineSegments2.js';
+import { LineSegmentsGeometry } from 'three/addons/lines/LineSegmentsGeometry.js';
+import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 
 /*
-  ADAM path-ribbon glow
-  ---------------------
-  The foreground hairlines are real ribbon meshes under:
+  ADAM path-ribbon edge + glow
+  ----------------------------
+  The foreground rails are real ribbon meshes under:
 
     Scene_1/Main_Group/paths/**
 
-  They must NOT go through the building EdgesGeometry pipeline: doing that puts
-  two nearly-coincident long edges plus short end-cap edges around each ribbon,
-  which is what produced the bright white/lime blobs at the ribbon ends.
+  Their rounded profile has shallow dihedral angles. At the building default of
+  30 degrees, EdgesGeometry discards the lengthwise rails and leaves mainly the
+  true boundary/end-cap segments — exactly the bright terminal dots we saw.
 
-  Instead we keep the paths as their original flat meshes and, only AFTER app-v2
-  has finished classifying the GLB, attach three mesh copies to each exact ribbon:
-    - broad outer halo
-    - tighter inner glow
-    - a subtle dark core overlay
+  The path ribbons therefore get their OWN EdgesGeometry threshold (default 10°)
+  while staying out of app-v2's building `solids` population. We additionally
+  filter the generated edges to keep segments running predominantly along the
+  ribbon's longest local axis. That removes the short end-cap/cross-profile
+  segments completely, so glow cannot accumulate into dots at ribbon ends.
 
-  The halo copies share the ribbon geometry and are expanded about the geometry
-  bounding-box centre, primarily across the ribbon width. That gives one
-  continuous glow band along the full path with no edge-segment accumulation at
-  the ends. No renderer monkeypatch is used; this module only intercepts the GLB
-  load long enough to retain exact object references, then restores GLTFLoader.
+  Colours/opacity/width still follow the normal Edge and Glow calibrator values;
+  only the path edge angle is independent.
 */
 
 const PATH_PREFIX = 'Scene_1/Main_Group/paths/';
+const DEFAULT_PATH_EDGE_ANGLE = 10;
 const retained = [];
 const entries = [];
-let overallSpan = 40;
+let builtAngle = null;
 let initialized = false;
+let totalRailSegments = 0;
+
+const edgeMaterial = new LineMaterial({
+  transparent:true,
+  depthTest:false,
+  depthWrite:false,
+  blending:THREE.NormalBlending
+});
+edgeMaterial.toneMapped = false;
+
+const innerGlowMaterial = new LineMaterial({
+  transparent:true,
+  depthTest:false,
+  depthWrite:false,
+  blending:THREE.NormalBlending
+});
+innerGlowMaterial.toneMapped = false;
+
+const outerGlowMaterial = new LineMaterial({
+  transparent:true,
+  depthTest:false,
+  depthWrite:false,
+  blending:THREE.NormalBlending
+});
+outerGlowMaterial.toneMapped = false;
 
 function pathOf(object) {
   const parts = [];
@@ -43,21 +69,19 @@ function pathOf(object) {
 
 function capture(root) {
   retained.length = 0;
-  root?.updateWorldMatrix?.(true, true);
   root?.traverse?.(object => {
     if (!object?.isMesh || !object.geometry?.attributes?.position) return;
     const path = pathOf(object);
     if (!path.startsWith(PATH_PREFIX)) return;
     retained.push({ mesh:object, originalPath:path });
   });
-  console.info(`[ADAM path ribbons] captured ${retained.length} Main_Group/paths mesh(es) before app-v2 classification.`);
+  console.info(`[ADAM path rails] captured ${retained.length} Main_Group/paths mesh(es).`);
 }
 
-// Capture exact GLB mesh references, but DO NOT attach child meshes here.
-// app-v2 traverses the model immediately after load; attaching glow meshes at
-// this point would make app-v2 classify the glow copies as model content too.
+// Capture exact mesh references before app-v2 classifies/recentres the model.
+// Do not attach line children until app-v2 has finished its own traversal.
 const originalLoadAsync = GLTFLoader.prototype.loadAsync;
-GLTFLoader.prototype.loadAsync = async function adamCapturePathRibbons(...args) {
+GLTFLoader.prototype.loadAsync = async function adamCapturePathRails(...args) {
   try {
     const gltf = await originalLoadAsync.apply(this, args);
     capture(gltf?.scene);
@@ -68,129 +92,112 @@ GLTFLoader.prototype.loadAsync = async function adamCapturePathRibbons(...args) 
   }
 };
 
-const outerMaterial = new THREE.MeshBasicMaterial({
-  color:0x86bf40,
-  transparent:true,
-  opacity:0.04,
-  depthTest:true,
-  depthWrite:false,
-  side:THREE.DoubleSide,
-  blending:THREE.NormalBlending,
-  polygonOffset:true,
-  polygonOffsetFactor:-1,
-  polygonOffsetUnits:-1,
-  toneMapped:false
-});
-
-const innerMaterial = new THREE.MeshBasicMaterial({
-  color:0x86bf40,
-  transparent:true,
-  opacity:0.10,
-  depthTest:true,
-  depthWrite:false,
-  side:THREE.DoubleSide,
-  blending:THREE.NormalBlending,
-  polygonOffset:true,
-  polygonOffsetFactor:-2,
-  polygonOffsetUnits:-2,
-  toneMapped:false
-});
-
-const coreMaterial = new THREE.MeshBasicMaterial({
-  color:0x242424,
-  transparent:true,
-  opacity:0.20,
-  depthTest:true,
-  depthWrite:false,
-  side:THREE.DoubleSide,
-  blending:THREE.NormalBlending,
-  polygonOffset:true,
-  polygonOffsetFactor:-3,
-  polygonOffsetUnits:-3,
-  toneMapped:false
-});
-
 function component(v, axis) {
   return axis === 0 ? v.x : axis === 1 ? v.y : v.z;
 }
 
-function setComponent(v, axis, value) {
-  if (axis === 0) v.x = value;
-  else if (axis === 1) v.y = value;
-  else v.z = value;
-}
-
-function geometryInfo(mesh) {
+function longestAxisOf(mesh) {
   mesh.geometry.computeBoundingBox();
   const box = mesh.geometry.boundingBox;
-  if (!box) return null;
-
-  const centre = box.getCenter(new THREE.Vector3());
+  if (!box) return 0;
   const size = box.getSize(new THREE.Vector3());
-  const axes = [0,1,2].sort((a,b) => component(size,a) - component(size,b));
-
-  // Smallest local dimension is thickness, middle is ribbon width, largest is
-  // path length. This remains valid even if the object itself is rotated.
-  return {
-    centre,
-    size,
-    thicknessAxis:axes[0],
-    widthAxis:axes[1],
-    lengthAxis:axes[2]
-  };
+  if (size.y >= size.x && size.y >= size.z) return 1;
+  if (size.z >= size.x && size.z >= size.y) return 2;
+  return 0;
 }
 
-function buildLayers() {
-  if (initialized) return;
-  initialized = true;
+function railGeometryForMesh(mesh, angle) {
+  const edges = new THREE.EdgesGeometry(mesh.geometry, angle);
+  const pos = edges.attributes.position;
+  if (!pos || pos.count < 2) {
+    edges.dispose();
+    return { geometry:null, segments:0 };
+  }
 
-  const overall = new THREE.Box3();
-  let any = false;
-  for (const retainedEntry of retained) {
-    const mesh = retainedEntry.mesh;
-    if (!mesh?.parent || !mesh.geometry?.attributes?.position) continue;
-    overall.expandByObject(mesh);
-    any = true;
+  const lengthAxis = longestAxisOf(mesh);
+  const kept = [];
+
+  for (let i = 0; i + 1 < pos.count; i += 2) {
+    const dx = pos.getX(i + 1) - pos.getX(i);
+    const dy = pos.getY(i + 1) - pos.getY(i);
+    const dz = pos.getZ(i + 1) - pos.getZ(i);
+    const d = [Math.abs(dx), Math.abs(dy), Math.abs(dz)];
+    const along = d[lengthAxis];
+    const across = Math.max(d[(lengthAxis + 1) % 3], d[(lengthAxis + 2) % 3]);
+
+    // Keep longitudinal rail segments; reject end caps / cross-profile strokes.
+    // A mild ratio allows shallow bends while still eliminating near-perpendicular
+    // terminal segments.
+    if (along < across * 0.65) continue;
+
+    kept.push(
+      pos.getX(i), pos.getY(i), pos.getZ(i),
+      pos.getX(i + 1), pos.getY(i + 1), pos.getZ(i + 1)
+    );
   }
-  if (any) {
-    const size = overall.getSize(new THREE.Vector3());
-    overallSpan = Math.max(size.x, size.y, size.z, 1);
+
+  edges.dispose();
+  if (!kept.length) return { geometry:null, segments:0 };
+
+  const geometry = new LineSegmentsGeometry();
+  geometry.setPositions(new Float32Array(kept));
+  return { geometry, segments:kept.length / 6 };
+}
+
+function clearLayers() {
+  for (const entry of entries) {
+    for (const line of [entry.outer, entry.inner, entry.edge]) {
+      line.removeFromParent();
+      line.geometry?.dispose?.();
+    }
   }
+  entries.length = 0;
+  totalRailSegments = 0;
+}
+
+function pathAngle() {
+  const input = document.getElementById('pathEdgeAngle');
+  const value = Number(input?.value);
+  return Number.isFinite(value) ? value : DEFAULT_PATH_EDGE_ANGLE;
+}
+
+function rebuild() {
+  const angle = pathAngle();
+  clearLayers();
 
   for (const retainedEntry of retained) {
     const source = retainedEntry.mesh;
     if (!source?.parent || !source.geometry?.attributes?.position) continue;
-    const info = geometryInfo(source);
-    if (!info) continue;
 
-    const outer = new THREE.Mesh(source.geometry, outerMaterial);
-    const inner = new THREE.Mesh(source.geometry, innerMaterial);
-    const core = new THREE.Mesh(source.geometry, coreMaterial);
+    const result = railGeometryForMesh(source, angle);
+    if (!result.geometry) continue;
 
-    outer.name = `${source.name || 'path'}__adam_path_outer_glow`;
-    inner.name = `${source.name || 'path'}__adam_path_inner_glow`;
-    core.name = `${source.name || 'path'}__adam_path_core`;
+    const outer = new LineSegments2(result.geometry, outerGlowMaterial);
+    const inner = new LineSegments2(result.geometry.clone(), innerGlowMaterial);
+    const edge = new LineSegments2(result.geometry.clone(), edgeMaterial);
 
-    for (const layer of [outer, inner, core]) {
-      layer.userData.adamPathRibbonLayer = true;
-      layer.userData.adamPathRibbonSource = retainedEntry.originalPath;
-      layer.frustumCulled = false;
+    for (const line of [outer, inner, edge]) {
+      line.userData.adamPathRailLayer = true;
+      line.userData.adamPathRailSource = retainedEntry.originalPath;
+      line.frustumCulled = false;
     }
 
     outer.renderOrder = 90;
     inner.renderOrder = 91;
-    core.renderOrder = 92;
+    edge.renderOrder = 92;
 
-    source.add(outer, inner, core);
-    entries.push({ source, outer, inner, core, ...info });
+    source.add(outer, inner, edge);
+    entries.push({ source, outer, inner, edge, segments:result.segments });
+    totalRailSegments += result.segments;
   }
 
-  bindControlListeners();
+  builtAngle = angle;
   syncFromCalibrator();
+  updateStatus();
 
   console.info(
-    `[ADAM path ribbons] built mesh glow for ${entries.length} ribbon mesh(es); ` +
-    `overall span ${overallSpan.toFixed(2)} world units.`
+    `[ADAM path rails] angle ${angle}° · ${entries.length}/${retained.length} ribbons · ` +
+    `${totalRailSegments} longitudinal segments.`
   );
 }
 
@@ -205,33 +212,18 @@ function readControl(hostId, key, fallback) {
   const input = wrap?._input;
   if (!input) return fallback;
   if (wrap._isColor) return input.value || fallback;
-  const number = Number(input.value);
-  return Number.isFinite(number) ? number : fallback;
+  const value = Number(input.value);
+  return Number.isFinite(value) ? value : fallback;
 }
 
-function scaleAroundGeometryCentre(entry, layer, widthPadWorld, lengthPadWorld) {
-  const worldScale = new THREE.Vector3();
-  entry.source.getWorldScale(worldScale);
-
-  const factors = new THREE.Vector3(1,1,1);
-  const localWidth = Math.max(component(entry.size, entry.widthAxis), 1e-7);
-  const localLength = Math.max(component(entry.size, entry.lengthAxis), 1e-7);
-  const widthWorldScale = Math.max(Math.abs(component(worldScale, entry.widthAxis)), 1e-7);
-  const lengthWorldScale = Math.max(Math.abs(component(worldScale, entry.lengthAxis)), 1e-7);
-
-  const localWidthPad = widthPadWorld / widthWorldScale;
-  const localLengthPad = lengthPadWorld / lengthWorldScale;
-
-  setComponent(factors, entry.widthAxis, 1 + (2 * localWidthPad / localWidth));
-  setComponent(factors, entry.lengthAxis, 1 + (2 * localLengthPad / localLength));
-
-  layer.scale.copy(factors);
-  layer.position.set(
-    entry.centre.x * (1 - factors.x),
-    entry.centre.y * (1 - factors.y),
-    entry.centre.z * (1 - factors.z)
-  );
-  layer.updateMatrix();
+function setResolution() {
+  const root = document.querySelector('[data-scene3d]');
+  const r = root?.getBoundingClientRect?.();
+  const w = Math.max(1, Math.round(r?.width || 1));
+  const h = Math.max(1, Math.round(r?.height || 1));
+  edgeMaterial.resolution.set(w, h);
+  innerGlowMaterial.resolution.set(w, h);
+  outerGlowMaterial.resolution.set(w, h);
 }
 
 function syncFromCalibrator() {
@@ -239,63 +231,77 @@ function syncFromCalibrator() {
 
   const edgeColor = readControl('edgeCtls', 'edge', '#242424');
   const edgeOpacity = readControl('edgeCtls', 'edgeOpacity', 0.14);
+  const edgeWidth = readControl('edgeCtls', 'edgeWidth', 1.0);
   const glowColor = readControl('glowCtls', 'glow', '#86bf40');
   const glowOpacity = readControl('glowCtls', 'glowOpacity', 0.06);
-  const glowWidth = readControl('glowCtls', 'glowWidth', 7);
+  const glowWidth = readControl('glowCtls', 'glowWidth', 7.0);
   const glowStrength = readControl('glowCtls', 'glowStrength', 0.55);
-  const glowExpansion = readControl('glowCtls', 'glowExpansion', 0.0015);
 
-  coreMaterial.color.set(edgeColor);
-  coreMaterial.opacity = THREE.MathUtils.clamp(edgeOpacity * 1.5, 0, 0.75);
+  edgeMaterial.color.set(edgeColor);
+  edgeMaterial.opacity = THREE.MathUtils.clamp(edgeOpacity, 0, 1);
+  edgeMaterial.linewidth = Math.max(0.2, edgeWidth);
 
-  innerMaterial.color.set(glowColor);
-  outerMaterial.color.set(glowColor);
-
-  // Normal alpha blending is intentional here. The background/site plate is
-  // almost white, and this produces a visible continuous green tint without the
-  // additive endpoint accumulation that the edge-line solution produced.
   const combined = THREE.MathUtils.clamp(glowOpacity * glowStrength, 0, 1);
-  innerMaterial.opacity = THREE.MathUtils.clamp(combined * 3.0, 0, 0.65);
-  outerMaterial.opacity = THREE.MathUtils.clamp(combined * 1.15, 0, 0.30);
+  innerGlowMaterial.color.set(glowColor);
+  innerGlowMaterial.opacity = THREE.MathUtils.clamp(combined * 2.3, 0, 0.55);
+  innerGlowMaterial.linewidth = Math.max(1, glowWidth);
 
-  // Convert the px-style glow width control into a stable world-space ribbon
-  // padding based on the overall path bundle span. Expansion slightly boosts it.
-  const widthScale = Math.max(0.05, glowWidth / 7);
-  const expansionBoost = 1 + Math.max(0, glowExpansion) * 60;
-  const innerPad = overallSpan * 0.00115 * widthScale * expansionBoost;
-  const outerPad = innerPad * 2.35;
+  outerGlowMaterial.color.set(glowColor);
+  outerGlowMaterial.opacity = THREE.MathUtils.clamp(combined * 0.9, 0, 0.24);
+  outerGlowMaterial.linewidth = Math.max(1.5, glowWidth * 1.9);
 
-  for (const entry of entries) {
-    scaleAroundGeometryCentre(entry, entry.inner, innerPad, innerPad * 0.16);
-    scaleAroundGeometryCentre(entry, entry.outer, outerPad, outerPad * 0.12);
-    entry.core.scale.set(1,1,1);
-    entry.core.position.set(0,0,0);
-  }
+  setResolution();
 
   const glowButton = document.getElementById('tGlow');
-  const edgesButton = document.getElementById('tEdges');
+  const edgeButton = document.getElementById('tEdges');
   const glowVisible = glowButton ? glowButton.classList.contains('on') : true;
-  const edgeVisible = edgesButton ? edgesButton.classList.contains('on') : true;
+  const edgeVisible = edgeButton ? edgeButton.classList.contains('on') : true;
 
   for (const entry of entries) {
-    entry.inner.visible = glowVisible && innerMaterial.opacity > 0;
-    entry.outer.visible = glowVisible && outerMaterial.opacity > 0;
-    entry.core.visible = edgeVisible && coreMaterial.opacity > 0;
+    entry.outer.visible = glowVisible;
+    entry.inner.visible = glowVisible;
+    entry.edge.visible = edgeVisible;
   }
 }
 
-function bindControlListeners() {
-  const edgeHost = document.getElementById('edgeCtls');
-  const glowHost = document.getElementById('glowCtls');
-  edgeHost?.addEventListener('input', syncFromCalibrator);
-  glowHost?.addEventListener('input', syncFromCalibrator);
+function updateStatus() {
+  const status = document.getElementById('pathRibbonStatus');
+  if (status) {
+    status.textContent = `${entries.length}/${retained.length} ribbons · ${totalRailSegments} rail segments · ${pathAngle()}°`;
+  }
+}
+
+function bindControls() {
+  const angleInput = document.getElementById('pathEdgeAngle');
+  const angleValue = document.getElementById('pathEdgeAngleV');
+  if (angleInput) {
+    const paint = () => {
+      if (angleValue) angleValue.textContent = `${Number(angleInput.value).toFixed(0)}°`;
+    };
+    angleInput.addEventListener('input', () => {
+      paint();
+      rebuild();
+    });
+    paint();
+  }
+
+  document.getElementById('edgeCtls')?.addEventListener('input', syncFromCalibrator);
+  document.getElementById('glowCtls')?.addEventListener('input', syncFromCalibrator);
+  document.getElementById('presetRow')?.addEventListener('click', () => requestAnimationFrame(syncFromCalibrator));
 
   for (const id of ['tEdges', 'tGlow', 'resetBtn']) {
     document.getElementById(id)?.addEventListener('click', () => requestAnimationFrame(syncFromCalibrator));
   }
 
-  const presetRow = document.getElementById('presetRow');
-  presetRow?.addEventListener('click', () => requestAnimationFrame(syncFromCalibrator));
+  const root = document.querySelector('[data-scene3d]');
+  if (root && 'ResizeObserver' in window) new ResizeObserver(setResolution).observe(root);
+}
+
+function initialize() {
+  if (initialized) return;
+  initialized = true;
+  bindControls();
+  rebuild();
 }
 
 let waitFrames = 0;
@@ -303,16 +309,14 @@ function waitForAppControls() {
   if (initialized) return;
   const edgeReady = document.getElementById('edgeCtls')?.children?.length;
   const glowReady = document.getElementById('glowCtls')?.children?.length;
-
   if (edgeReady && glowReady) {
-    buildLayers();
+    initialize();
     return;
   }
-
   if (waitFrames++ < 180) requestAnimationFrame(waitForAppControls);
-  else console.warn('[ADAM path ribbons] app-v2 controls never became ready; ribbon glow not initialized.');
+  else console.warn('[ADAM path rails] app-v2 controls never became ready.');
 }
 
 window.__ADAM_PATH_RIBBON_REFS = retained;
-window.__ADAM_PATH_RIBBON_LAYERS = entries;
-window.__ADAM_SYNC_PATH_RIBBON_GLOW = syncFromCalibrator;
+window.__ADAM_PATH_RAIL_LAYERS = entries;
+window.__ADAM_REBUILD_PATH_RAILS = rebuild;
