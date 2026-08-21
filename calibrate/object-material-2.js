@@ -4,13 +4,14 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 /*
   ADAM Object Material 2
   ----------------------
-  The 71 explicitly selected GLB meshes below remain normal scene/building
-  objects, but get a second independent face style in the calibrator.
+  Selected building meshes keep all normal scene behaviour, but their face
+  material is controlled independently from the main Building material panel.
 
-  Everything not in this set continues to use the existing Building material
-  controls in app-v2. This module captures exact mesh references before any
-  spline reparenting, then reapplies Material 2 immediately before each render
-  so app-v2's global face styling cannot overwrite this selected group.
+  Material 2 is applied twice for reliability:
+    1) whenever its controls change;
+    2) in each selected mesh's onBeforeRender callback, immediately before that
+       mesh is drawn. That makes Material 2 authoritative even if app-v2's
+       global Building material styling runs earlier in the same frame.
 */
 
 const MATERIAL_2_PATHS = new Set([
@@ -48,6 +49,7 @@ const MATERIAL_2_PATHS = new Set([
   'Scene_1/Main_Group/clusters/cluster_4_/mesh_9_instance_8',
   'Scene_1/Main_Group/clusters/cluster_4_/mesh_9_instance_6',
   'Scene_1/Main_Group/clusters/cluster_4_/Group_2/Rectangle_2',
+  'Scene_1/Main_Group/clusters/cluster_4_/Group_2/Rectangle_3',
   'Scene_1/Main_Group/clusters/cluster_4_/Group_2/mesh_6_instance_2',
   'Scene_1/Main_Group/clusters/cluster_4_/Group_2/mesh_6_instance_3',
   'Scene_1/Main_Group/clusters/cluster_4_/Group_2/mesh_6_instance_4',
@@ -98,6 +100,7 @@ const style = {
 
 const selected = [];
 const originals = new Map();
+const previousBeforeRender = new Map();
 let prepared = false;
 let uiBound = false;
 const tmpColor = new THREE.Color();
@@ -120,6 +123,8 @@ function materialArray(mesh) {
 function capture(root) {
   selected.length = 0;
   originals.clear();
+  previousBeforeRender.clear();
+  prepared = false;
   const resolved = new Set();
 
   root?.traverse?.(mesh => {
@@ -146,7 +151,6 @@ function capture(root) {
   updateStatus();
 }
 
-// Capture pristine hierarchy before spline motion/reparenting.
 const originalLoadAsync = GLTFLoader.prototype.loadAsync;
 GLTFLoader.prototype.loadAsync = async function adamCaptureMaterial2(...args) {
   try {
@@ -159,21 +163,53 @@ GLTFLoader.prototype.loadAsync = async function adamCaptureMaterial2(...args) {
   }
 };
 
+function applyOne(mesh) {
+  const snaps = originals.get(mesh) || [];
+  const mats = materialArray(mesh);
+  const tint = tmpColor.set(style.face);
+  const lift = Math.max(0, style.faceLift);
+
+  mats.forEach((mat, index) => {
+    const original = snaps[index] || snaps[0];
+    if (!mat || !original) return;
+    if (mat.color) mat.color.copy(original.color).lerp(tint, style.faceTint);
+    if (mat.emissive && mat.color) {
+      mat.emissive.copy(mat.color);
+      mat.emissiveIntensity = lift;
+    }
+    if ('roughness' in mat) mat.roughness = style.faceRoughness;
+    if ('metalness' in mat) mat.metalness = style.faceMetalness;
+    mat.transparent = true;
+    mat.opacity = style.faceOpacity;
+    mat.depthWrite = true;
+    mat.depthTest = true;
+    mat.needsUpdate = true;
+  });
+}
+
 function ensureIndependentMaterials() {
   if (prepared || !selected.length) return;
   for (const { mesh } of selected) {
-    if (Array.isArray(mesh.material)) mesh.material = mesh.material.map(mat => {
-      const clone = mat.clone();
-      clone.name = 'Object Material 2';
-      clone.userData = { ...(clone.userData || {}), adamObjectMaterial:2 };
-      return clone;
-    });
-    else if (mesh.material) {
+    if (Array.isArray(mesh.material)) {
+      mesh.material = mesh.material.map(mat => {
+        const clone = mat.clone();
+        clone.name = 'Object Material 2';
+        clone.userData = { ...(clone.userData || {}), adamObjectMaterial:2 };
+        return clone;
+      });
+    } else if (mesh.material) {
       const clone = mesh.material.clone();
       clone.name = 'Object Material 2';
       clone.userData = { ...(clone.userData || {}), adamObjectMaterial:2 };
       mesh.material = clone;
     }
+
+    const prior = mesh.onBeforeRender;
+    previousBeforeRender.set(mesh, prior);
+    mesh.onBeforeRender = function adamMaterial2BeforeRender(...args) {
+      if (typeof prior === 'function') prior.apply(this, args);
+      applyOne(this);
+    };
   }
   prepared = true;
 }
@@ -181,29 +217,7 @@ function ensureIndependentMaterials() {
 function applyMaterial2() {
   if (!selected.length) return;
   ensureIndependentMaterials();
-  const tint = tmpColor.set(style.face);
-  const lift = Math.max(0, style.faceLift);
-
-  for (const { mesh } of selected) {
-    const snaps = originals.get(mesh) || [];
-    const mats = materialArray(mesh);
-    mats.forEach((mat, index) => {
-      const original = snaps[index] || snaps[0];
-      if (!mat || !original) return;
-      if (mat.color) mat.color.copy(original.color).lerp(tint, style.faceTint);
-      if (mat.emissive && mat.color) {
-        mat.emissive.copy(mat.color);
-        mat.emissiveIntensity = lift;
-      }
-      if ('roughness' in mat) mat.roughness = style.faceRoughness;
-      if ('metalness' in mat) mat.metalness = style.faceMetalness;
-      mat.transparent = true;
-      mat.opacity = style.faceOpacity;
-      mat.depthWrite = true;
-      mat.depthTest = true;
-      mat.needsUpdate = true;
-    });
-  }
+  for (const { mesh } of selected) applyOne(mesh);
 }
 
 function updateStatus() {
@@ -268,9 +282,8 @@ function waitForUI() {
 }
 requestAnimationFrame(waitForUI);
 
-// Reassert Material 2 immediately before the actual draw. This is deliberate:
-// app-v2's normal Building material panel still styles every building mesh, but
-// these selected objects must always win with the independent Material 2 style.
+// Keep a renderer-level reassertion as a second safety net. The per-mesh
+// onBeforeRender callback above is the authoritative last write before draw.
 const previousRender = THREE.WebGLRenderer.prototype.render;
 THREE.WebGLRenderer.prototype.render = function adamMaterial2Render(scene, camera) {
   applyMaterial2();
