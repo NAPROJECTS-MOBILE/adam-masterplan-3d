@@ -1,19 +1,22 @@
 import * as THREE from 'three';
-import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
 /*
   ADAM Object Material 2
   ----------------------
-  Exact GLB mesh-path targeting with an authoritative per-mesh material binding.
+  Exact runtime mesh-path targeting with an authoritative per-mesh material
+  binding.
 
-  Rectangle_4 and Rectangle_5 are Spline 3D Paths in the authoring file, but the
-  exported GLB contains them as ordinary single-primitive THREE.Mesh objects.
-  They also originate from a heavily shared glTF material. app-v2 clones source
-  materials during setup, and Material 2 then creates its own independent clone.
+  IMPORTANT: target discovery deliberately does NOT hook GLTFLoader anymore.
+  Several calibrator modules wrap GLTFLoader.loadAsync, so a one-shot loader
+  hook can be consumed/restored by the wrong load. Instead we sweep the actual
+  scene passed to WebGLRenderer.render on its first frame, after app-v2 has
+  loaded the model and cloned its source materials. This guarantees Material 2
+  captures the meshes/materials that are really about to render.
 
-  The important rule here is ownership: once a target receives its Material 2
-  material, that exact clone is stored and re-bound if any later code replaces
-  mesh.material. We never apply Material 2 values to an unknown/shared material.
+  Rectangle_4 and Rectangle_5 are ordinary exported THREE.Mesh targets. They
+  share their source glTF material with many other meshes, so once selected we
+  store an independent Material 2 clone and re-bind that exact clone if any
+  later code replaces mesh.material.
 */
 
 const MATERIAL_2_TARGET_PATHS = new Set([
@@ -90,9 +93,7 @@ const MATERIAL_2_TARGET_PATHS = new Set([
   'Scene_1/Main_Group/clusters/cluster_1/b5/b5a/Rectangle_42'
 ]);
 
-// These are the two authoring-time Spline 3D Paths. In the GLB they are plain
-// meshes; the set is now only used for focused diagnostics/rebind logging.
-const SHARED_MATERIAL_GUARD_PATHS = new Set([
+const FOCUS_TARGET_PATHS = new Set([
   'Scene_1/Main_Group/clusters/cluster_4_/Rectangle_4',
   'Scene_1/Main_Group/clusters/cluster_4_/Rectangle_5'
 ]);
@@ -110,6 +111,7 @@ const selected = [];
 const selectedByMesh = new Map();
 const originals = new Map();
 const resolvedTargets = new Set();
+let capturedScene = null;
 let uiBound = false;
 const tmpColor = new THREE.Color();
 
@@ -160,38 +162,37 @@ function addSelectedMesh(mesh, targetPath) {
   return true;
 }
 
-function capture(root) {
+function captureRuntimeScene(scene) {
   selected.length = 0;
   selectedByMesh.clear();
   originals.clear();
   resolvedTargets.clear();
 
-  root?.traverse?.(mesh => {
+  scene?.traverse?.(mesh => {
     if (!mesh?.isMesh) return;
     const path = pathOf(mesh);
     if (!MATERIAL_2_TARGET_PATHS.has(path)) return;
     if (addSelectedMesh(mesh, path)) resolvedTargets.add(path);
   });
 
+  capturedScene = scene;
+
   const missing = [...MATERIAL_2_TARGET_PATHS].filter(path => !resolvedTargets.has(path));
+  const focus = [...FOCUS_TARGET_PATHS].map(path => ({
+    path,
+    resolved:resolvedTargets.has(path),
+    mesh:selected.find(entry => entry.targetPath === path)?.mesh || null
+  }));
+
   console.info(
-    `[ADAM material 2] resolved ${resolvedTargets.size}/${MATERIAL_2_TARGET_PATHS.size} target mesh(es).`
+    `[ADAM material 2] first-render scene sweep resolved ` +
+    `${resolvedTargets.size}/${MATERIAL_2_TARGET_PATHS.size} target object(s) ` +
+    `to ${selected.length} render mesh(es).`
   );
+  console.info('[ADAM material 2] Rectangle_4 / Rectangle_5 runtime resolution:', focus);
   if (missing.length) console.warn('[ADAM material 2] unresolved target paths:', missing);
   updateStatus();
 }
-
-const originalLoadAsync = GLTFLoader.prototype.loadAsync;
-GLTFLoader.prototype.loadAsync = async function adamCaptureMaterial2(...args) {
-  try {
-    const gltf = await originalLoadAsync.apply(this, args);
-    capture(gltf?.scene);
-    setTimeout(waitForUI, 0);
-    return gltf;
-  } finally {
-    GLTFLoader.prototype.loadAsync = originalLoadAsync;
-  }
-};
 
 function cloneMaterial2(source) {
   const clone = source.clone();
@@ -223,14 +224,16 @@ function assignAuthoritativeBinding(entry) {
   if (!entry.material2) {
     const current = materialArray(mesh);
     if (!current.length) return false;
+
     entry.materialWasArray = Array.isArray(mesh.material);
     entry.material2 = current.map(cloneMaterial2);
 
-    if (SHARED_MATERIAL_GUARD_PATHS.has(entry.targetPath)) {
-      console.info('[ADAM material 2 guard] isolated target material', {
+    if (FOCUS_TARGET_PATHS.has(entry.targetPath)) {
+      console.info('[ADAM material 2] isolated focus target material', {
         path:entry.targetPath,
-        source:current.map(mat => mat.uuid),
-        material2:entry.material2.map(mat => mat.uuid)
+        mesh:mesh.name,
+        source:current.map(mat => ({ uuid:mat.uuid, name:mat.name, type:mat.type })),
+        material2:entry.material2.map(mat => ({ uuid:mat.uuid, name:mat.name, type:mat.type }))
       });
     }
   }
@@ -239,9 +242,9 @@ function assignAuthoritativeBinding(entry) {
     mesh.material = entry.materialWasArray ? entry.material2 : entry.material2[0];
     entry.rebinds++;
 
-    if (SHARED_MATERIAL_GUARD_PATHS.has(entry.targetPath) && entry.rebinds <= 3) {
+    if (FOCUS_TARGET_PATHS.has(entry.targetPath) && entry.rebinds <= 3) {
       console.warn(
-        `[ADAM material 2 guard] rebound ${entry.targetPath} to its authoritative Material 2 clone ` +
+        `[ADAM material 2] rebound ${entry.targetPath} to its authoritative clone ` +
         `(rebind ${entry.rebinds}).`
       );
     }
@@ -297,10 +300,16 @@ function applyMaterial2() {
 function updateStatus() {
   const el = document.getElementById('material2Status');
   if (!el) return;
-  const guarded = selected.filter(entry => SHARED_MATERIAL_GUARD_PATHS.has(entry.targetPath)).length;
+
+  if (!capturedScene) {
+    el.textContent = 'waiting for first rendered scene…';
+    return;
+  }
+
+  const focusResolved = selected.filter(entry => FOCUS_TARGET_PATHS.has(entry.targetPath)).length;
   el.textContent =
-    `${resolvedTargets.size}/${MATERIAL_2_TARGET_PATHS.size} objects assigned to Material 2 · ` +
-    `guarded targets ${guarded}/${SHARED_MATERIAL_GUARD_PATHS.size}`;
+    `${resolvedTargets.size}/${MATERIAL_2_TARGET_PATHS.size} target objects · ` +
+    `${selected.length} render meshes · Rectangle_4/5 ${focusResolved}/${FOCUS_TARGET_PATHS.size}`;
 }
 
 function bindRange(id, key, digits = 2) {
@@ -359,18 +368,21 @@ function waitForUI() {
 }
 requestAnimationFrame(waitForUI);
 
-// Loaded before the other renderer wrappers. Later wrappers call through to this
-// one, so this rebind/style pass runs immediately before the real Three render.
+// This wrapper is installed before app-v2 creates its renderer. On the first
+// actual frame, the scene is fully populated and app-v2's setup/material clones
+// are complete. Capture from that live scene exactly once, then style it.
 const previousRender = THREE.WebGLRenderer.prototype.render;
 THREE.WebGLRenderer.prototype.render = function adamMaterial2Render(scene, camera) {
+  if (capturedScene !== scene) captureRuntimeScene(scene);
   applyMaterial2();
   return previousRender.call(this, scene, camera);
 };
 
 window.__ADAM_OBJECT_MATERIAL_2_STYLE = style;
 window.__ADAM_OBJECT_MATERIAL_2_PATHS = MATERIAL_2_TARGET_PATHS;
-window.__ADAM_OBJECT_MATERIAL_2_GUARDED_PATHS = SHARED_MATERIAL_GUARD_PATHS;
-// Return actual meshes so console diagnostics can inspect .material directly.
+window.__ADAM_OBJECT_MATERIAL_2_FOCUS_PATHS = FOCUS_TARGET_PATHS;
+window.__ADAM_OBJECT_MATERIAL_2_CAPTURE_MODE = 'first-render-scene-sweep';
 window.__ADAM_OBJECT_MATERIAL_2_MESHES = () => selected.map(entry => entry.mesh);
 window.__ADAM_OBJECT_MATERIAL_2_ENTRIES = () => selected;
 window.__ADAM_OBJECT_MATERIAL_2_RESOLVED = () => [...resolvedTargets];
+window.__ADAM_OBJECT_MATERIAL_2_RECAPTURE = () => { capturedScene = null; };
