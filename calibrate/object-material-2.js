@@ -4,16 +4,14 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 /*
   ADAM Object Material 2
   ----------------------
-  Exact GLB mesh-path targeting with an authoritative per-mesh material binding.
+  The proven path-targeting system remains intact for all existing Material 2
+  objects. The M2-split GLB also exposes three previously ambiguous/unreachable
+  groups through unique material names, so this same capture/apply pipeline now
+  accepts either an exact object path OR one of those material names.
 
-  Rectangle_4 and Rectangle_5 are Spline 3D Paths in the authoring file, but the
-  exported GLB contains them as ordinary single-primitive THREE.Mesh objects.
-  They also originate from a heavily shared glTF material. app-v2 clones source
-  materials during setup, and Material 2 then creates its own independent clone.
-
-  The important rule here is ownership: once a target receives its Material 2
-  material, that exact clone is stored and re-bound if any later code replaces
-  mesh.material. We never apply Material 2 values to an unknown/shared material.
+  Keeping both selectors in this one module is intentional: the old path system
+  already works, and the split-material meshes must use the exact same clone,
+  rebind and UI styling path rather than a second competing Material 2 module.
 */
 
 const MATERIAL_2_TARGET_PATHS = new Set([
@@ -90,8 +88,14 @@ const MATERIAL_2_TARGET_PATHS = new Set([
   'Scene_1/Main_Group/clusters/cluster_1/b5/b5a/Rectangle_42'
 ]);
 
-// These are the two authoring-time Spline 3D Paths. In the GLB they are plain
-// meshes; the set is now only used for focused diagnostics/rebind logging.
+// These are unique only in the split GLB. They intentionally catch anonymous
+// nodes which cannot be selected reliably by pathOf().
+const MATERIAL_2_TARGET_MATERIALS = new Set([
+  'ADAM_M2_CL4_ISLAND_A',
+  'ADAM_M2_CL4_ISLAND_B',
+  'ADAM_M2_GRP2_RECT3_SMALL'
+]);
+
 const SHARED_MATERIAL_GUARD_PATHS = new Set([
   'Scene_1/Main_Group/clusters/cluster_4_/Rectangle_4',
   'Scene_1/Main_Group/clusters/cluster_4_/Rectangle_5'
@@ -110,6 +114,7 @@ const selected = [];
 const selectedByMesh = new Map();
 const originals = new Map();
 const resolvedTargets = new Set();
+const resolvedMaterialTargets = new Set();
 let uiBound = false;
 const tmpColor = new THREE.Color();
 
@@ -128,6 +133,12 @@ function materialArray(mesh) {
   return mesh.material ? [mesh.material] : [];
 }
 
+function targetMaterialName(mesh) {
+  return materialArray(mesh)
+    .map(mat => mat?.name || '')
+    .find(name => MATERIAL_2_TARGET_MATERIALS.has(name)) || '';
+}
+
 function snapshotMaterials(mesh) {
   return materialArray(mesh).map(mat => ({
     color:mat?.color?.clone?.() || new THREE.Color(0xffffff),
@@ -139,12 +150,14 @@ function snapshotMaterials(mesh) {
   }));
 }
 
-function addSelectedMesh(mesh, targetPath) {
+function addSelectedMesh(mesh, targetKey, sourceKind, sourceValue) {
   if (!mesh?.isMesh || !mesh.material || selectedByMesh.has(mesh)) return false;
 
   const entry = {
     mesh,
-    targetPath,
+    targetKey,
+    sourceKind,
+    sourceValue,
     meshPath:pathOf(mesh),
     material2:null,
     materialWasArray:Array.isArray(mesh.material),
@@ -156,7 +169,9 @@ function addSelectedMesh(mesh, targetPath) {
   selectedByMesh.set(mesh, entry);
   originals.set(mesh, snapshotMaterials(mesh));
   mesh.userData.adamObjectMaterial = 2;
-  mesh.userData.adamObjectMaterialPath = targetPath;
+  mesh.userData.adamObjectMaterialSource = sourceKind;
+  mesh.userData.adamObjectMaterialPath = entry.meshPath;
+  if (sourceKind === 'material') mesh.userData.adamObjectMaterialSourceMaterial = sourceValue;
   return true;
 }
 
@@ -165,19 +180,47 @@ function capture(root) {
   selectedByMesh.clear();
   originals.clear();
   resolvedTargets.clear();
+  resolvedMaterialTargets.clear();
 
   root?.traverse?.(mesh => {
-    if (!mesh?.isMesh) return;
+    if (!mesh?.isMesh || !mesh.material) return;
+
     const path = pathOf(mesh);
-    if (!MATERIAL_2_TARGET_PATHS.has(path)) return;
-    if (addSelectedMesh(mesh, path)) resolvedTargets.add(path);
+    const materialTarget = targetMaterialName(mesh);
+
+    // Record material-name resolution even if this exact mesh is also already
+    // addressable by a path. This makes the status line a useful integrity check.
+    if (materialTarget) resolvedMaterialTargets.add(materialTarget);
+
+    if (MATERIAL_2_TARGET_PATHS.has(path)) {
+      if (addSelectedMesh(mesh, path, 'path', path)) resolvedTargets.add(path);
+      return;
+    }
+
+    if (materialTarget) {
+      addSelectedMesh(mesh, `material:${materialTarget}`, 'material', materialTarget);
+    }
   });
 
-  const missing = [...MATERIAL_2_TARGET_PATHS].filter(path => !resolvedTargets.has(path));
-  console.info(
-    `[ADAM material 2] resolved ${resolvedTargets.size}/${MATERIAL_2_TARGET_PATHS.size} target mesh(es).`
-  );
-  if (missing.length) console.warn('[ADAM material 2] unresolved target paths:', missing);
+  const missingPaths = [...MATERIAL_2_TARGET_PATHS].filter(path => !resolvedTargets.has(path));
+  const missingMaterials = [...MATERIAL_2_TARGET_MATERIALS]
+    .filter(name => !resolvedMaterialTargets.has(name));
+
+  const splitCounts = {};
+  for (const name of MATERIAL_2_TARGET_MATERIALS) {
+    splitCounts[name] = selected.filter(entry =>
+      materialArray(entry.mesh).some(mat => mat?.name === name)
+    ).length;
+  }
+
+  console.info('[ADAM material 2] capture complete', {
+    resolvedPaths:`${resolvedTargets.size}/${MATERIAL_2_TARGET_PATHS.size}`,
+    resolvedSplitMaterials:`${resolvedMaterialTargets.size}/${MATERIAL_2_TARGET_MATERIALS.size}`,
+    renderMeshes:selected.length,
+    splitCounts
+  });
+  if (missingPaths.length) console.warn('[ADAM material 2] unresolved target paths:', missingPaths);
+  if (missingMaterials.length) console.warn('[ADAM material 2] unresolved split materials:', missingMaterials);
   updateStatus();
 }
 
@@ -226,9 +269,9 @@ function assignAuthoritativeBinding(entry) {
     entry.materialWasArray = Array.isArray(mesh.material);
     entry.material2 = current.map(cloneMaterial2);
 
-    if (SHARED_MATERIAL_GUARD_PATHS.has(entry.targetPath)) {
+    if (SHARED_MATERIAL_GUARD_PATHS.has(entry.meshPath)) {
       console.info('[ADAM material 2 guard] isolated target material', {
-        path:entry.targetPath,
+        path:entry.meshPath,
         source:current.map(mat => mat.uuid),
         material2:entry.material2.map(mat => mat.uuid)
       });
@@ -239,9 +282,9 @@ function assignAuthoritativeBinding(entry) {
     mesh.material = entry.materialWasArray ? entry.material2 : entry.material2[0];
     entry.rebinds++;
 
-    if (SHARED_MATERIAL_GUARD_PATHS.has(entry.targetPath) && entry.rebinds <= 3) {
+    if (SHARED_MATERIAL_GUARD_PATHS.has(entry.meshPath) && entry.rebinds <= 3) {
       console.warn(
-        `[ADAM material 2 guard] rebound ${entry.targetPath} to its authoritative Material 2 clone ` +
+        `[ADAM material 2 guard] rebound ${entry.meshPath} to its authoritative Material 2 clone ` +
         `(rebind ${entry.rebinds}).`
       );
     }
@@ -297,10 +340,10 @@ function applyMaterial2() {
 function updateStatus() {
   const el = document.getElementById('material2Status');
   if (!el) return;
-  const guarded = selected.filter(entry => SHARED_MATERIAL_GUARD_PATHS.has(entry.targetPath)).length;
   el.textContent =
-    `${resolvedTargets.size}/${MATERIAL_2_TARGET_PATHS.size} objects assigned to Material 2 · ` +
-    `guarded targets ${guarded}/${SHARED_MATERIAL_GUARD_PATHS.size}`;
+    `${resolvedTargets.size}/${MATERIAL_2_TARGET_PATHS.size} path targets · ` +
+    `${resolvedMaterialTargets.size}/${MATERIAL_2_TARGET_MATERIALS.size} split materials · ` +
+    `${selected.length} render meshes`;
 }
 
 function bindRange(id, key, digits = 2) {
@@ -359,8 +402,6 @@ function waitForUI() {
 }
 requestAnimationFrame(waitForUI);
 
-// Loaded before the other renderer wrappers. Later wrappers call through to this
-// one, so this rebind/style pass runs immediately before the real Three render.
 const previousRender = THREE.WebGLRenderer.prototype.render;
 THREE.WebGLRenderer.prototype.render = function adamMaterial2Render(scene, camera) {
   applyMaterial2();
@@ -369,8 +410,9 @@ THREE.WebGLRenderer.prototype.render = function adamMaterial2Render(scene, camer
 
 window.__ADAM_OBJECT_MATERIAL_2_STYLE = style;
 window.__ADAM_OBJECT_MATERIAL_2_PATHS = MATERIAL_2_TARGET_PATHS;
+window.__ADAM_OBJECT_MATERIAL_2_MATERIALS = MATERIAL_2_TARGET_MATERIALS;
 window.__ADAM_OBJECT_MATERIAL_2_GUARDED_PATHS = SHARED_MATERIAL_GUARD_PATHS;
-// Return actual meshes so console diagnostics can inspect .material directly.
 window.__ADAM_OBJECT_MATERIAL_2_MESHES = () => selected.map(entry => entry.mesh);
 window.__ADAM_OBJECT_MATERIAL_2_ENTRIES = () => selected;
 window.__ADAM_OBJECT_MATERIAL_2_RESOLVED = () => [...resolvedTargets];
+window.__ADAM_OBJECT_MATERIAL_2_RESOLVED_MATERIALS = () => [...resolvedMaterialTargets];
