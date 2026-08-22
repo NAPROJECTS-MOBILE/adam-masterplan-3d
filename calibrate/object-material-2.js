@@ -51,7 +51,6 @@ const MATERIAL_2_TARGET_PATHS = new Set([
   'Scene_1/Main_Group/clusters/cluster_4_/mesh_9_instance_8',
   'Scene_1/Main_Group/clusters/cluster_4_/mesh_9_instance_6',
   'Scene_1/Main_Group/clusters/cluster_4_/Group_2/Rectangle_2',
-  'Scene_1/Main_Group/clusters/cluster_4_/Group_2/Rectangle_3',
   'Scene_1/Main_Group/clusters/cluster_4_/Group_2/mesh_6_instance_2',
   'Scene_1/Main_Group/clusters/cluster_4_/Group_2/mesh_6_instance_3',
   'Scene_1/Main_Group/clusters/cluster_4_/Group_2/mesh_6_instance_4',
