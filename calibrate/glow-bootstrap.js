@@ -3,13 +3,16 @@ import { FORCE_GLOW_PATHS } from './glow-targets.js?v=72-strip-glow-20260821-004
 
 /* ADAM explicit native classification bootstrap
    ---------------------------------------------
-   This bootstrap now applies ONLY to architectural cluster meshes that need to
-   enter app-v2's existing building edge/glow pipeline.
+   This bootstrap applies only to architectural cluster meshes that need to
+   enter app-v2's existing building face/edge/glow pipeline.
 
-   Foreground path ribbons live under Scene_1/Main_Group/paths/** and are no
-   longer promoted here. They stay in app-v2's flat/path population and receive
-   their own mesh-based ribbon glow from path-ribbon-glow.js, which avoids the
-   endpoint blobs caused by EdgesGeometry on ultra-thin ribbons.
+   Some Spline objects export as very thin shape/rectangle meshes. Their world
+   Y extent falls below app-v2's FLAT_THRESHOLD, so without this explicit
+   classification they are treated like flat/path geometry instead of building
+   faces and therefore miss the normal face-material rules.
+
+   Foreground path ribbons under Scene_1/Main_Group/paths/** are not promoted
+   here; they keep their dedicated path-ribbon renderer.
 */
 
 const FORCE_MIN_Y = 0.100001;
@@ -26,7 +29,12 @@ const CRITICAL_THIN_CLUSTER_PATHS = new Set([
   'Scene_1/Main_Group/clusters/cluster_2/Rectangle_10',
   'Scene_1/Main_Group/clusters/cluster_2/Rectangle_3_2',
   'Scene_1/Main_Group/clusters/cluster_1/floor',
-  'Scene_1/Main_Group/clusters/cluster_1/b10/Rectangle_9'
+  'Scene_1/Main_Group/clusters/cluster_1/b10/Rectangle_9',
+  // These two cluster-4 rectangles are Spline block/shape exports rather than
+  // ordinary solid meshes. Force them through the same building-face pipeline
+  // as the other architecture so Object Material 2 can style them normally.
+  'Scene_1/Main_Group/clusters/cluster_4_/Rectangle_4',
+  'Scene_1/Main_Group/clusters/cluster_4_/Rectangle_5'
 ]);
 
 const FORCE_CLASSIFY_PATHS = new Set([
@@ -78,7 +86,7 @@ try {
   if (missing.length) console.warn('[ADAM native classification] unresolved explicit paths:', missing);
 
   const thinResolved = [...CRITICAL_THIN_CLUSTER_PATHS].filter(path => matched.has(path));
-  console.info(`[ADAM five-face native edge+glow] classification ${thinResolved.length}/5`);
+  console.info(`[ADAM thin-face native classification] ${thinResolved.length}/${CRITICAL_THIN_CLUSTER_PATHS.size}`);
 
   const roofResolved = [...STATIC_ROOF_GLOW_PATHS].filter(path => matched.has(path));
   console.info(`[ADAM roof glow] native classification ${roofResolved.length}/2`);
