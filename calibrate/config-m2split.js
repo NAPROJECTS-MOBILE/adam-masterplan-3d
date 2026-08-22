@@ -1,9 +1,11 @@
 import * as BASE from './config.js?m2split-base-20260822-1249';
-import { M2_SPLIT_MODEL_URL } from './m2split-model-url.js?v=20260822-1249';
 
 // Calibrator-only config wrapper. Everything except MODEL_URL is inherited
 // unchanged from the approved calibrator config.
-export const MODEL_URL = M2_SPLIT_MODEL_URL;
+//
+// This now points at the actual split GLB committed under /model rather than
+// rebuilding that transform in-browser.
+export const MODEL_URL = './model/adam_landscape_in_use_fullerversion_m2split.glb?v=55bb022db8f5017432b8767fac5f1a9cf6db0375';
 export const FLAT_THRESHOLD = BASE.FLAT_THRESHOLD;
 export const PRESETS = BASE.PRESETS;
 export const START_POSE = BASE.START_POSE;
