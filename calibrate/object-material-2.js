@@ -4,22 +4,16 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 /*
   ADAM Object Material 2
   ----------------------
-  Most Material 2 targets export from Spline as ordinary GLB mesh nodes and can
-  be matched directly by their full path.
+  Exact GLB mesh-path targeting with an authoritative per-mesh material binding.
 
-  Rectangle_4 and Rectangle_5 are different: in the source Spline scene they
-  are 3D Path objects. A Spline 3D Path is a generated mesh container, and its
-  rendered GLB primitive(s) may sit below the named path node rather than being
-  the named node itself. Matching only `object.isMesh && path === targetPath`
-  therefore misses them.
+  Rectangle_4 and Rectangle_5 are Spline 3D Paths in the authoring file, but the
+  exported GLB contains them as ordinary single-primitive THREE.Mesh objects.
+  They also originate from a heavily shared glTF material. app-v2 clones source
+  materials during setup, and Material 2 then creates its own independent clone.
 
-  For those two exact Spline 3D Path targets we match the named node first, then
-  assign Material 2 to every descendant render mesh. We also give those render
-  meshes a clean MeshStandardMaterial so Spline's exported Color Layer / vertex
-  colour contribution cannot multiply over the independent Material 2 colour.
-
-  No building/flat/path classification is changed here. Material 2 is applied
-  directly to the selected render meshes and reasserted in onBeforeRender.
+  The important rule here is ownership: once a target receives its Material 2
+  material, that exact clone is stored and re-bound if any later code replaces
+  mesh.material. We never apply Material 2 values to an unknown/shared material.
 */
 
 const MATERIAL_2_TARGET_PATHS = new Set([
@@ -96,7 +90,9 @@ const MATERIAL_2_TARGET_PATHS = new Set([
   'Scene_1/Main_Group/clusters/cluster_1/b5/b5a/Rectangle_42'
 ]);
 
-const SPLINE_3D_PATH_TARGETS = new Set([
+// These are the two authoring-time Spline 3D Paths. In the GLB they are plain
+// meshes; the set is now only used for focused diagnostics/rebind logging.
+const SHARED_MATERIAL_GUARD_PATHS = new Set([
   'Scene_1/Main_Group/clusters/cluster_4_/Rectangle_4',
   'Scene_1/Main_Group/clusters/cluster_4_/Rectangle_5'
 ]);
@@ -114,7 +110,6 @@ const selected = [];
 const selectedByMesh = new Map();
 const originals = new Map();
 const resolvedTargets = new Set();
-let prepared = false;
 let uiBound = false;
 const tmpColor = new THREE.Color();
 
@@ -144,31 +139,25 @@ function snapshotMaterials(mesh) {
   }));
 }
 
-function addSelectedMesh(mesh, targetPath, spline3DPath = false) {
+function addSelectedMesh(mesh, targetPath) {
   if (!mesh?.isMesh || !mesh.material || selectedByMesh.has(mesh)) return false;
 
   const entry = {
     mesh,
     targetPath,
     meshPath:pathOf(mesh),
-    spline3DPath
+    material2:null,
+    materialWasArray:Array.isArray(mesh.material),
+    hookInstalled:false,
+    rebinds:0
   };
+
   selected.push(entry);
   selectedByMesh.set(mesh, entry);
   originals.set(mesh, snapshotMaterials(mesh));
   mesh.userData.adamObjectMaterial = 2;
   mesh.userData.adamObjectMaterialPath = targetPath;
-  mesh.userData.adamSpline3DPathMaterial2 = spline3DPath;
   return true;
-}
-
-function addSpline3DPathNode(node, targetPath) {
-  let meshParts = 0;
-  node.traverse?.(child => {
-    if (addSelectedMesh(child, targetPath, true)) meshParts++;
-  });
-  if (meshParts) resolvedTargets.add(targetPath);
-  console.info(`[ADAM material 2] Spline 3D Path ${targetPath} -> ${meshParts} render mesh part(s).`);
 }
 
 function capture(root) {
@@ -176,36 +165,22 @@ function capture(root) {
   selectedByMesh.clear();
   originals.clear();
   resolvedTargets.clear();
-  prepared = false;
 
-  // First resolve the two named Spline 3D Path containers. They may not be
-  // meshes themselves, so matching must happen on all Object3D nodes.
-  root?.traverse?.(object => {
-    const path = pathOf(object);
-    if (!SPLINE_3D_PATH_TARGETS.has(path)) return;
-    addSpline3DPathNode(object, path);
-  });
-
-  // Normal Material 2 targets are ordinary GLB mesh nodes and remain exact-path
-  // matches. Skip the two 3D Path target names because they were handled above.
   root?.traverse?.(mesh => {
     if (!mesh?.isMesh) return;
     const path = pathOf(mesh);
-    if (SPLINE_3D_PATH_TARGETS.has(path)) return;
     if (!MATERIAL_2_TARGET_PATHS.has(path)) return;
-    if (addSelectedMesh(mesh, path, false)) resolvedTargets.add(path);
+    if (addSelectedMesh(mesh, path)) resolvedTargets.add(path);
   });
 
   const missing = [...MATERIAL_2_TARGET_PATHS].filter(path => !resolvedTargets.has(path));
   console.info(
-    `[ADAM material 2] resolved ${resolvedTargets.size}/${MATERIAL_2_TARGET_PATHS.size} target object(s) ` +
-    `to ${selected.length} render mesh part(s).`
+    `[ADAM material 2] resolved ${resolvedTargets.size}/${MATERIAL_2_TARGET_PATHS.size} target mesh(es).`
   );
   if (missing.length) console.warn('[ADAM material 2] unresolved target paths:', missing);
   updateStatus();
 }
 
-// Capture exact source hierarchy before app-v2 does any motion/reparenting.
 const originalLoadAsync = GLTFLoader.prototype.loadAsync;
 GLTFLoader.prototype.loadAsync = async function adamCaptureMaterial2(...args) {
   try {
@@ -218,61 +193,87 @@ GLTFLoader.prototype.loadAsync = async function adamCaptureMaterial2(...args) {
   }
 };
 
-function clean3DPathMaterial(mesh, source, snapshot) {
-  const mat = new THREE.MeshStandardMaterial({
-    color:snapshot?.color || source?.color || 0xffffff,
-    roughness:snapshot?.roughness ?? source?.roughness ?? 1,
-    metalness:snapshot?.metalness ?? source?.metalness ?? 0,
-    transparent:true,
-    opacity:snapshot?.opacity ?? source?.opacity ?? 1,
-    side:snapshot?.side ?? source?.side ?? THREE.FrontSide,
-    alphaTest:snapshot?.alphaTest ?? source?.alphaTest ?? 0,
-    depthTest:true,
-    depthWrite:true,
-    flatShading:!mesh.geometry?.attributes?.normal
-  });
-
-  // A GLB Color Layer can arrive as base-colour texture and/or vertex colour
-  // modulation. Material 2 must be authoritative, so neither is carried over.
-  mat.map = null;
-  mat.vertexColors = false;
-  mat.name = 'Object Material 2 — Spline 3D Path';
-  mat.userData = { adamObjectMaterial:2, adamSpline3DPath:true };
-  return mat;
-}
-
-function cloneMaterial2(mesh, source, snapshot, spline3DPath) {
-  if (spline3DPath) return clean3DPathMaterial(mesh, source, snapshot);
+function cloneMaterial2(source) {
   const clone = source.clone();
   clone.name = 'Object Material 2';
-  clone.userData = { ...(clone.userData || {}), adamObjectMaterial:2 };
+  clone.userData = {
+    ...(clone.userData || {}),
+    adamObjectMaterial:2,
+    adamMaterial2:true
+  };
   return clone;
+}
+
+function bindingMatches(entry) {
+  if (!entry.material2?.length) return false;
+  const { mesh, material2, materialWasArray } = entry;
+
+  if (materialWasArray) {
+    return Array.isArray(mesh.material) &&
+      mesh.material.length === material2.length &&
+      mesh.material.every((mat, i) => mat === material2[i]);
+  }
+
+  return !Array.isArray(mesh.material) && mesh.material === material2[0];
+}
+
+function assignAuthoritativeBinding(entry) {
+  const { mesh } = entry;
+
+  if (!entry.material2) {
+    const current = materialArray(mesh);
+    if (!current.length) return false;
+    entry.materialWasArray = Array.isArray(mesh.material);
+    entry.material2 = current.map(cloneMaterial2);
+
+    if (SHARED_MATERIAL_GUARD_PATHS.has(entry.targetPath)) {
+      console.info('[ADAM material 2 guard] isolated target material', {
+        path:entry.targetPath,
+        source:current.map(mat => mat.uuid),
+        material2:entry.material2.map(mat => mat.uuid)
+      });
+    }
+  }
+
+  if (!bindingMatches(entry)) {
+    mesh.material = entry.materialWasArray ? entry.material2 : entry.material2[0];
+    entry.rebinds++;
+
+    if (SHARED_MATERIAL_GUARD_PATHS.has(entry.targetPath) && entry.rebinds <= 3) {
+      console.warn(
+        `[ADAM material 2 guard] rebound ${entry.targetPath} to its authoritative Material 2 clone ` +
+        `(rebind ${entry.rebinds}).`
+      );
+    }
+  }
+
+  if (!entry.hookInstalled) {
+    const prior = mesh.onBeforeRender;
+    mesh.onBeforeRender = function adamMaterial2BeforeRender(...args) {
+      if (typeof prior === 'function') prior.apply(this, args);
+      const liveEntry = selectedByMesh.get(this);
+      if (!liveEntry) return;
+      assignAuthoritativeBinding(liveEntry);
+      applyOne(this);
+    };
+    entry.hookInstalled = true;
+  }
+
+  return true;
 }
 
 function applyOne(mesh) {
   const entry = selectedByMesh.get(mesh);
-  if (!entry) return;
+  if (!entry || !assignAuthoritativeBinding(entry)) return;
 
   const snaps = originals.get(mesh) || [];
-  const mats = materialArray(mesh);
+  const mats = entry.material2 || [];
   const tint = tmpColor.set(style.face);
   const lift = Math.max(0, style.faceLift);
 
   mats.forEach((mat, index) => {
     const original = snaps[index] || snaps[0];
     if (!mat || !original) return;
-
-    if (entry.spline3DPath) {
-      // Keep Material 2 unmultiplied by exported path Color Layer data.
-      if ('vertexColors' in mat && mat.vertexColors) {
-        mat.vertexColors = false;
-        mat.needsUpdate = true;
-      }
-      if ('map' in mat && mat.map) {
-        mat.map = null;
-        mat.needsUpdate = true;
-      }
-    }
 
     if (mat.color) mat.color.copy(original.color).lerp(tint, style.faceTint);
     if (mat.emissive && mat.color) {
@@ -289,43 +290,17 @@ function applyOne(mesh) {
   });
 }
 
-function ensureIndependentMaterials() {
-  if (prepared || !selected.length) return;
-
-  for (const entry of selected) {
-    const { mesh, spline3DPath } = entry;
-    const snaps = originals.get(mesh) || [];
-    const current = materialArray(mesh);
-    if (!current.length) continue;
-
-    const replacements = current.map((source, index) =>
-      cloneMaterial2(mesh, source, snaps[index] || snaps[0], spline3DPath)
-    );
-    mesh.material = Array.isArray(mesh.material) ? replacements : replacements[0];
-
-    const prior = mesh.onBeforeRender;
-    mesh.onBeforeRender = function adamMaterial2BeforeRender(...args) {
-      if (typeof prior === 'function') prior.apply(this, args);
-      applyOne(this);
-    };
-  }
-
-  prepared = true;
-}
-
 function applyMaterial2() {
-  if (!selected.length) return;
-  ensureIndependentMaterials();
   for (const { mesh } of selected) applyOne(mesh);
 }
 
 function updateStatus() {
   const el = document.getElementById('material2Status');
   if (!el) return;
-  const pathMeshParts = selected.filter(entry => entry.spline3DPath).length;
+  const guarded = selected.filter(entry => SHARED_MATERIAL_GUARD_PATHS.has(entry.targetPath)).length;
   el.textContent =
-    `${resolvedTargets.size}/${MATERIAL_2_TARGET_PATHS.size} target objects · ` +
-    `${selected.length} render meshes · 3D Path parts ${pathMeshParts}`;
+    `${resolvedTargets.size}/${MATERIAL_2_TARGET_PATHS.size} objects assigned to Material 2 · ` +
+    `guarded targets ${guarded}/${SHARED_MATERIAL_GUARD_PATHS.size}`;
 }
 
 function bindRange(id, key, digits = 2) {
@@ -357,8 +332,7 @@ function bindColor(id, key) {
 }
 
 function bindUI() {
-  if (uiBound) return;
-  if (!document.getElementById('material2Ctls')) return;
+  if (uiBound || !document.getElementById('material2Ctls')) return;
   uiBound = true;
 
   bindColor('material2Face', 'face');
@@ -385,8 +359,8 @@ function waitForUI() {
 }
 requestAnimationFrame(waitForUI);
 
-// Safety net: reassert Material 2 before each frame. The per-mesh
-// onBeforeRender callback remains the last write immediately before draw.
+// Loaded before the other renderer wrappers. Later wrappers call through to this
+// one, so this rebind/style pass runs immediately before the real Three render.
 const previousRender = THREE.WebGLRenderer.prototype.render;
 THREE.WebGLRenderer.prototype.render = function adamMaterial2Render(scene, camera) {
   applyMaterial2();
@@ -395,6 +369,8 @@ THREE.WebGLRenderer.prototype.render = function adamMaterial2Render(scene, camer
 
 window.__ADAM_OBJECT_MATERIAL_2_STYLE = style;
 window.__ADAM_OBJECT_MATERIAL_2_PATHS = MATERIAL_2_TARGET_PATHS;
-window.__ADAM_OBJECT_MATERIAL_2_SPLINE_3D_PATHS = SPLINE_3D_PATH_TARGETS;
-window.__ADAM_OBJECT_MATERIAL_2_MESHES = () => selected;
+window.__ADAM_OBJECT_MATERIAL_2_GUARDED_PATHS = SHARED_MATERIAL_GUARD_PATHS;
+// Return actual meshes so console diagnostics can inspect .material directly.
+window.__ADAM_OBJECT_MATERIAL_2_MESHES = () => selected.map(entry => entry.mesh);
+window.__ADAM_OBJECT_MATERIAL_2_ENTRIES = () => selected;
 window.__ADAM_OBJECT_MATERIAL_2_RESOLVED = () => [...resolvedTargets];
