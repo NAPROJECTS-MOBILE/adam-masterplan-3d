@@ -1,0 +1,87 @@
+{
+  "format": "ADAM Spline -> split GLB material-slot dry-run",
+  "status": "mapping only; no runtime or GLB material assignments changed",
+  "baseline": {
+    "freezeBranch": "freeze/webflow-preview5-working-20260824",
+    "freezeCommit": "df81a76a14a6c456a5ee203f362be91103a07377"
+  },
+  "source": {
+    "splineSharedMaterials": 13,
+    "splineMeshBaseAssignments": 234,
+    "glbNodes": 375,
+    "glbMeshNodes": 225,
+    "glbMeshDefinitions": 145,
+    "glbMaterialSlots": 47
+  },
+  "highConfidenceSharedMaterialSlots": {
+    "toon": {
+      "splineMaterialId": "e6bc7808-7964-41fe-a627-d125ad7fb20d",
+      "glbMaterialIndices": [2],
+      "evidence": "40+ independent geometry/local-transform matches; dominant exported building-body slot"
+    },
+    "window": {
+      "splineMaterialId": "b2fa0234-8c27-4235-a36e-37732cf4a150",
+      "glbMaterialIndices": [3, 42, 43],
+      "evidence": "exact Spline color 0.8564193860619469 exported in slot 3 and M2 split descendants 42/43"
+    },
+    "window 2": {
+      "splineMaterialId": "91705951-e377-4dee-9607-56cd3e0c393c",
+      "glbMaterialIndices": [5, 45, 46],
+      "evidence": "exact Spline color 0.838720271017699 exported in slot 5 and M2 split descendants 45/46"
+    },
+    "toon 3": {
+      "splineMaterialId": "aeb09d2e-8304-4908-af99-afdedf1656b9",
+      "glbMaterialIndices": [44],
+      "evidence": "exact geometry + transform match to ADAM_M2_GRP2_RECT3_LARGE"
+    },
+    "villa borders": {
+      "splineMaterialId": "4ce8f4a8-d8ef-4f4d-8f61-a562ac623779",
+      "glbMaterialIndices": [9],
+      "evidence": "exact exported color 0.8416931692477876 plus geometry evidence"
+    },
+    "toon wo": {
+      "splineMaterialId": "0d8cae94-f0a2-4264-b572-deebb04c80d7",
+      "glbMaterialIndices": [24],
+      "evidence": "all six Cylinder 3-8 source assignments resolve to slot 24 with exact cylinder dimensions"
+    },
+    "c toon": {
+      "splineMaterialId": "04f8ad07-da72-4728-b683-0cd412aa16f5",
+      "glbMaterialIndices": [25],
+      "evidence": "four source assignments resolve to slot 25; cylinder and vector geometry dimensions match exactly"
+    },
+    "path": {
+      "splineMaterialId": "fa0b7fa5-e6c0-4b9e-9b42-0256fb0880b6",
+      "glbMaterialIndices": [31],
+      "evidence": "11 geometry matches plus exact exported color 0.6959520188053097; known path-ribbon source meshes"
+    }
+  },
+  "splitMaterialLineage": {
+    "42": {"name": "ADAM_M2_GRP2_RECT3_SMALL", "splineAppearanceLineage": "window"},
+    "43": {"name": "ADAM_M2_GRP2_ISLAND", "splineAppearanceLineage": "window"},
+    "44": {"name": "ADAM_M2_GRP2_RECT3_LARGE", "splineAppearanceLineage": "toon 3"},
+    "45": {"name": "ADAM_M2_CL4_ISLAND_A", "splineAppearanceLineage": "window 2"},
+    "46": {"name": "ADAM_M2_CL4_ISLAND_B", "splineAppearanceLineage": "window 2"}
+  },
+  "unresolvedSharedMaterials": {
+    "toon 2": {
+      "reason": "source instances are largely hidden/component-template geometry and are merged/restructured by GLB export; no safe one-slot assignment yet"
+    },
+    "roof": {
+      "reason": "source roof triangles are component/template geometry and do not yield a safe one-slot correspondence in the split GLB yet"
+    },
+    "floor": {
+      "reason": "the shared floor recipe appears on a component/template Rectangle 2; current GLB contains multiple base/floor-like surfaces so slot assignment would be guesswork"
+    }
+  },
+  "notRequiredForBaseMeshTransfer": {
+    "fact": "shared recipe exists but has zero base Mesh assignments in the extracted source-of-truth manifest",
+    "Untitled Material": "shared recipe exists but has zero base Mesh assignments in the extracted source-of-truth manifest"
+  },
+  "preservationRules": [
+    "Do not reassign any GLB mesh to a different material slot.",
+    "Do not merge material slots merely because their exported PBR JSON is identical.",
+    "Keep M2 split slots 42-46 separate so the proven Material 2 targeting remains possible.",
+    "Keep inline Spline recipes separate; do not flatten them into a shared material class.",
+    "Do not modify the frozen Preview 5 baseline branch."
+  ]
+}
