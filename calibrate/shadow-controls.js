@@ -1,32 +1,31 @@
 import * as THREE from 'three';
 
 /*
-  ADAM shadow calibrator
-  ----------------------
-  Adds a neutral, shadow-only directional-light system without changing the
-  approved scene lighting/materials.
+  ADAM shadow calibrator V2
+  -------------------------
+  V1 used a generic receiver plane derived from architecture bounds. That can be
+  at a completely different Y from the separately transformed site base, making
+  valid shadows invisible behind / away from the visible slab.
 
-  - the DirectionalLight intensity stays at 0: it exists only to generate a
-    shadow map and therefore contributes no visible white light to the scene;
-  - architecture meshes cast shadows;
-  - a transparent ShadowMaterial receiver catches those shadows on the ground;
-  - existing building materials do NOT receive these shadows by default, so the
-    approved face treatment remains untouched;
-  - camera, glow, path ribbons, Material 2, base/slab and dots are untouched.
+  V2 clones the ACTUAL base-slab geometry and world transform, lifts the shadow
+  receiver slightly above it, and uses a tiny non-zero white-light intensity to
+  keep Three's complete directional-shadow pipeline active without materially
+  changing the approved scene lighting.
 */
 
 const DEFAULTS = {
   enabled:true,
   azimuth:42,
   elevation:58,
-  darkness:0.20,
-  softness:4.0,
+  darkness:0.35,
+  softness:3.0,
   bias:-0.00035,
   normalBias:0.02,
-  receiverOffset:0.018,
+  receiverOffset:0.025,
   mapSize:2048
 };
 
+const SHADOW_LIGHT_INTENSITY = 0.001;
 const state = { ...DEFAULTS };
 let installed = false;
 let shadowLight = null;
@@ -36,6 +35,7 @@ let architecture = [];
 let sceneBounds = null;
 let contentCentre = new THREE.Vector3();
 let contentRadius = 10;
+let slabMesh = null;
 let panelBuilt = false;
 let statusEl = null;
 
@@ -49,8 +49,32 @@ function pathOf(object) {
   return parts.reverse().join('/');
 }
 
+function findSlab(scene) {
+  const mainGroup = scene?.getObjectByName?.('Main_Group');
+  if (!mainGroup) return null;
+
+  let best = null;
+  let bestArea = -Infinity;
+  for (const object of mainGroup.children) {
+    if (!object?.isMesh || !/^Rectangle(?:_\d+)?$/.test(object.name)) continue;
+    object.geometry?.computeBoundingBox?.();
+    const box = object.geometry?.boundingBox;
+    if (!box) continue;
+    const size = box.getSize(new THREE.Vector3());
+    const planar = size.z < 1e-5 && size.x > 1000 && size.y > 1000;
+    if (!planar) continue;
+    const area = size.x * size.y;
+    if (area > bestArea) {
+      best = object;
+      bestArea = area;
+    }
+  }
+  return best;
+}
+
 function isArchitectureMesh(object) {
   if (!object?.isMesh || object.isLineSegments2) return false;
+  if (object === slabMesh) return false;
   if (object.userData?.adamGlowHull) return false;
   if (object.userData?.adamShadowReceiver) return false;
   if (!object.geometry?.attributes?.position) return false;
@@ -66,8 +90,6 @@ function collectArchitecture(scene) {
     if (!isArchitectureMesh(object)) return;
     architecture.push(object);
     object.castShadow = true;
-    // Keep approved surface lighting unchanged. Shadows are caught by the
-    // dedicated receiver plane instead of darkening the building materials.
     object.receiveShadow = false;
     tmp.setFromObject(object);
     if (!tmp.isEmpty()) box.union(tmp);
@@ -82,36 +104,59 @@ function collectArchitecture(scene) {
 }
 
 function makeReceiver(scene) {
-  if (!sceneBounds || sceneBounds.isEmpty()) return;
-
-  const size = sceneBounds.getSize(new THREE.Vector3());
-  const width = Math.max(size.x * 1.35, contentRadius * 2.4);
-  const depth = Math.max(size.z * 1.35, contentRadius * 2.4);
-  const groundY = sceneBounds.min.y - state.receiverOffset;
-
   receiverMaterial = new THREE.ShadowMaterial({
     color:0x000000,
     transparent:true,
     opacity:state.darkness,
     depthWrite:false,
-    toneMapped:false
+    depthTest:true,
+    toneMapped:false,
+    side:THREE.DoubleSide
   });
 
-  receiver = new THREE.Mesh(new THREE.PlaneGeometry(width, depth), receiverMaterial);
+  const lift = new THREE.Matrix4().makeTranslation(0, state.receiverOffset, 0);
+
+  if (slabMesh?.geometry) {
+    // Match the real visible base exactly, including app-v2 rotation, position,
+    // and the live Base plate size control's scale.
+    slabMesh.updateWorldMatrix(true, false);
+    receiver = new THREE.Mesh(slabMesh.geometry, receiverMaterial);
+    receiver.matrixAutoUpdate = false;
+    receiver.matrix.copy(slabMesh.matrixWorld);
+    receiver.matrix.premultiply(lift);
+    receiver.userData.adamShadowReceiverUsesSlab = true;
+  } else {
+    // Fallback only if the base cannot be resolved.
+    const size = sceneBounds?.getSize(new THREE.Vector3()) || new THREE.Vector3(20,1,20);
+    const width = Math.max(size.x * 1.35, contentRadius * 2.4);
+    const depth = Math.max(size.z * 1.35, contentRadius * 2.4);
+    receiver = new THREE.Mesh(new THREE.PlaneGeometry(width, depth), receiverMaterial);
+    receiver.rotation.x = -Math.PI / 2;
+    receiver.position.set(contentCentre.x, (sceneBounds?.min.y || 0) + state.receiverOffset, contentCentre.z);
+  }
+
   receiver.name = 'ADAM_Shadow_Receiver';
   receiver.userData.adamShadowReceiver = true;
-  receiver.rotation.x = -Math.PI / 2;
-  receiver.position.set(contentCentre.x, groundY, contentCentre.z);
   receiver.receiveShadow = true;
   receiver.castShadow = false;
   receiver.frustumCulled = false;
-  receiver.renderOrder = -5;
+  // Draw after the translucent site slab so the black shadow overlay remains
+  // visible instead of being hidden beneath the approved slab material.
+  receiver.renderOrder = -10;
   scene.add(receiver);
 }
 
+function syncReceiverToSlab() {
+  if (!receiver || !slabMesh || !receiver.userData.adamShadowReceiverUsesSlab) return;
+  slabMesh.updateWorldMatrix(true, false);
+  receiver.matrix.copy(slabMesh.matrixWorld);
+  receiver.matrix.premultiply(new THREE.Matrix4().makeTranslation(0, state.receiverOffset, 0));
+  receiver.matrixWorldNeedsUpdate = true;
+}
+
 function makeShadowLight(scene) {
-  shadowLight = new THREE.DirectionalLight(0xffffff, 0);
-  shadowLight.name = 'ADAM_Shadow_Only_Directional';
+  shadowLight = new THREE.DirectionalLight(0xffffff, SHADOW_LIGHT_INTENSITY);
+  shadowLight.name = 'ADAM_Shadow_Directional';
   shadowLight.castShadow = true;
   shadowLight.target.name = 'ADAM_Shadow_Target';
 
@@ -121,15 +166,13 @@ function makeShadowLight(scene) {
   shadow.normalBias = state.normalBias;
   shadow.radius = state.softness;
 
-  // A snug orthographic camera gives much better shadow-map resolution than a
-  // giant generic frustum while still covering the complete architecture.
-  const span = contentRadius * 1.25;
+  const span = contentRadius * 1.35;
   shadow.camera.left = -span;
   shadow.camera.right = span;
   shadow.camera.top = span;
   shadow.camera.bottom = -span;
   shadow.camera.near = 0.1;
-  shadow.camera.far = contentRadius * 8;
+  shadow.camera.far = contentRadius * 10;
   shadow.camera.updateProjectionMatrix();
 
   scene.add(shadowLight, shadowLight.target);
@@ -154,9 +197,12 @@ function updateDirection() {
 }
 
 function applyState(renderer) {
+  if (!renderer) return;
   renderer.shadowMap.enabled = !!state.enabled;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   renderer.shadowMap.autoUpdate = true;
+
+  syncReceiverToSlab();
 
   if (receiver) receiver.visible = !!state.enabled;
   if (receiverMaterial) {
@@ -165,8 +211,9 @@ function applyState(renderer) {
   }
 
   if (shadowLight) {
+    shadowLight.visible = !!state.enabled;
     shadowLight.castShadow = !!state.enabled;
-    shadowLight.intensity = 0; // explicitly shadow-only; no lighting contribution
+    shadowLight.intensity = SHADOW_LIGHT_INTENSITY;
     shadowLight.shadow.radius = state.softness;
     shadowLight.shadow.bias = state.bias;
     shadowLight.shadow.normalBias = state.normalBias;
@@ -204,7 +251,6 @@ function buildControls() {
 
   const heading = document.createElement('h2');
   heading.textContent = 'Shadows';
-
   const host = document.createElement('div');
   host.id = 'shadowCtls';
 
@@ -247,7 +293,6 @@ function buildControls() {
   statusEl.style.marginTop = '8px';
   host.appendChild(statusEl);
 
-  // Put shadows immediately after the existing Base plate controls.
   const next = anchor.nextSibling;
   panel.insertBefore(heading, next);
   panel.insertBefore(host, heading.nextSibling);
@@ -257,7 +302,7 @@ function buildControls() {
 function updateStatus() {
   if (!statusEl) return;
   statusEl.textContent = state.enabled
-    ? `shadow-only light · ${architecture.length} casters · white light intensity 0 · map ${state.mapSize}px`
+    ? `shadow map ON · ${architecture.length} casters · receiver ${slabMesh ? 'actual base slab' : 'fallback plane'} · white light ${SHADOW_LIGHT_INTENSITY} · map ${state.mapSize}px`
     : 'shadow calibration disabled';
 }
 
@@ -270,30 +315,35 @@ function install(renderer, scene) {
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
   scene.updateMatrixWorld(true);
+  slabMesh = findSlab(scene);
   collectArchitecture(scene);
   makeReceiver(scene);
   makeShadowLight(scene);
   buildControls();
   applyState(renderer);
 
-  console.info(
-    `[ADAM shadows] installed shadow-only directional system; ` +
-    `casters=${architecture.length}; radius=${contentRadius.toFixed(2)}`
-  );
+  console.info('[ADAM shadows V2]', {
+    casters:architecture.length,
+    radius:contentRadius,
+    slab:slabMesh?.name || null,
+    receiverUsesSlab:!!receiver?.userData?.adamShadowReceiverUsesSlab,
+    lightIntensity:SHADOW_LIGHT_INTENSITY
+  });
 }
 
 const previousRender = THREE.WebGLRenderer.prototype.render;
-THREE.WebGLRenderer.prototype.render = function adamShadowCalibrationRender(scene, camera) {
+THREE.WebGLRenderer.prototype.render = function adamShadowCalibrationV2Render(scene, camera) {
   install(this, scene);
   applyState(this);
   return previousRender.call(this, scene, camera);
 };
 
 window.__ADAM_SHADOW_CALIBRATOR = {
-  version:1,
+  version:2,
   state,
   defaults:DEFAULTS,
   get light(){ return shadowLight; },
   get receiver(){ return receiver; },
+  get slab(){ return slabMesh; },
   get casters(){ return architecture; }
 };
