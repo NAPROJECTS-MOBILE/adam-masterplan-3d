@@ -8,7 +8,7 @@ const DEFAULTS = {
   softness:3.0,
   bias:-0.00035,
   normalBias:0.02,
-  receiverOffset:0.025,
+  receiverOffset:0.005,
   mapSize:4096
 };
 
@@ -132,11 +132,20 @@ function makeReceiver(scene) {
 }
 
 function syncReceiverToSlab() {
-  if (!receiver || !slabMesh || !receiver.userData.adamShadowReceiverUsesSlab) return;
-  slabMesh.updateWorldMatrix(true, false);
-  receiver.matrix.copy(slabMesh.matrixWorld);
-  receiver.matrix.premultiply(new THREE.Matrix4().makeTranslation(0, state.receiverOffset, 0));
-  receiver.matrixWorldNeedsUpdate = true;
+  if (!receiver) return;
+
+  if (slabMesh && receiver.userData.adamShadowReceiverUsesSlab) {
+    slabMesh.updateWorldMatrix(true, false);
+    receiver.matrix.copy(slabMesh.matrixWorld);
+    receiver.matrix.premultiply(new THREE.Matrix4().makeTranslation(0, state.receiverOffset, 0));
+    receiver.matrixWorldNeedsUpdate = true;
+    return;
+  }
+
+  if (sceneBounds && !sceneBounds.isEmpty()) {
+    receiver.position.y = sceneBounds.min.y + state.receiverOffset;
+    receiver.updateMatrixWorld(true);
+  }
 }
 
 function makeShadowLight(scene, renderer) {
@@ -227,6 +236,21 @@ function fitShadowCamera() {
   shadowLight.shadow.needsUpdate = true;
 }
 
+function ensureReceiverOffsetControl() {
+  if ($('shadowReceiverOffset')) return;
+  const root = $('shadowCtls');
+  const reset = $('resetShadowBtn');
+  if (!root || !reset) return;
+
+  const wrap = document.createElement('div');
+  wrap.className = 'ctl';
+  wrap.innerHTML = `
+    <label>Shadow receiver height<span id="shadowReceiverOffsetV" data-v>+0.005</span></label>
+    <input id="shadowReceiverOffset" type="range" min="-0.1" max="0.1" step="0.001" value="0.005">
+  `;
+  root.insertBefore(wrap, reset);
+}
+
 function updateReadouts() {
   const values = {
     shadowAzimuthV:`${state.azimuth.toFixed(0)}°`,
@@ -234,7 +258,8 @@ function updateReadouts() {
     shadowDarknessV:state.darkness.toFixed(2),
     shadowSoftnessV:state.softness.toFixed(2),
     shadowBiasV:state.bias.toFixed(5),
-    shadowNormalBiasV:state.normalBias.toFixed(4)
+    shadowNormalBiasV:state.normalBias.toFixed(4),
+    shadowReceiverOffsetV:`${state.receiverOffset >= 0 ? '+' : ''}${state.receiverOffset.toFixed(3)}`
   };
   for (const [id,text] of Object.entries(values)) if ($(id)) $(id).textContent = text;
 }
@@ -250,7 +275,7 @@ function updateStatus() {
     ? ` · fitted ${fittedFrustum.width.toFixed(1)}×${fittedFrustum.height.toFixed(1)}`
     : '';
   statusEl.textContent = state.enabled
-    ? `shadow V5 ACTIVE · hooks ${renderTicks} · ${architecture.length} casters · VSM ${state.mapSize}px × ${VSM_BLUR_SAMPLES} blur${fit} · map ${shadowLight?.shadow?.map ? 'READY' : 'pending'}`
+    ? `shadow V5 ACTIVE · hooks ${renderTicks} · ${architecture.length} casters · receiver ${state.receiverOffset >= 0 ? '+' : ''}${state.receiverOffset.toFixed(3)} · VSM ${state.mapSize}px × ${VSM_BLUR_SAMPLES} blur${fit} · map ${shadowLight?.shadow?.map ? 'READY' : 'pending'}`
     : 'shadow calibration disabled';
 }
 
@@ -283,7 +308,9 @@ function applyState(renderer) {
 
 function bindUI() {
   if (uiBound) return;
-  const required = ['shadowAzimuth','shadowElevation','shadowDarkness','shadowSoftness','shadowBias','shadowNormalBias','tShadowCalibration','resetShadowBtn'];
+  ensureReceiverOffsetControl();
+
+  const required = ['shadowAzimuth','shadowElevation','shadowDarkness','shadowSoftness','shadowBias','shadowNormalBias','shadowReceiverOffset','tShadowCalibration','resetShadowBtn'];
   if (!required.every(id => $(id))) return;
   uiBound = true;
 
@@ -303,6 +330,7 @@ function bindUI() {
   bind('shadowSoftness','softness');
   bind('shadowBias','bias');
   bind('shadowNormalBias','normalBias');
+  bind('shadowReceiverOffset','receiverOffset');
 
   const toggle = $('tShadowCalibration');
   toggle.onclick = () => {
@@ -316,7 +344,8 @@ function bindUI() {
     for (const [id,key] of [
       ['shadowAzimuth','azimuth'],['shadowElevation','elevation'],
       ['shadowDarkness','darkness'],['shadowSoftness','softness'],
-      ['shadowBias','bias'],['shadowNormalBias','normalBias']
+      ['shadowBias','bias'],['shadowNormalBias','normalBias'],
+      ['shadowReceiverOffset','receiverOffset']
     ]) $(id).value = state[key];
     toggle.classList.toggle('on', state.enabled);
     frustumDirty = true;
@@ -345,9 +374,10 @@ function install(renderer, scene) {
   makeShadowLight(scene, renderer);
   applyState(renderer);
 
-  console.info('[ADAM shadows V5 smooth]', {
+  console.info('[ADAM shadows V5 blur8 receiver-height-calibrator]', {
     casters:architecture.length,
     slab:slabMesh?.name || null,
+    receiverOffset:state.receiverOffset,
     mapSize:state.mapSize,
     filter:'VSM',
     blurSamples:VSM_BLUR_SAMPLES,
@@ -366,7 +396,7 @@ window.__ADAM_BEFORE_RENDER_HOOKS = window.__ADAM_BEFORE_RENDER_HOOKS || [];
 window.__ADAM_BEFORE_RENDER_HOOKS.push(beforeRender);
 
 window.__ADAM_SHADOW_CALIBRATOR = {
-  version:5,
+  version:5.2,
   state,
   defaults:DEFAULTS,
   get renderTicks(){ return renderTicks; },
