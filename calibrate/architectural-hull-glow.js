@@ -3,15 +3,20 @@ import { mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
 import { FORCE_GLOW_PATHS } from './glow-targets.js?v=72-strip-glow-20260821-0048';
 
 /*
-  ADAM architectural glow — inverted-hull prototype
-  -------------------------------------------------
+  ADAM architectural glow — inverted-hull prototype V2
+  ----------------------------------------------------
   Replaces visible architectural fat-line glow with a continuous mesh shell.
-  The existing native LineSegments2 glow remains in the scene ONLY as a hidden
-  live style source, so the calibrator's approved Glow controls continue to
-  control colour / opacity / width without changing app-v2's state model.
 
-  Path ribbons are not touched.
-  Crisp 1px architecture edges are not touched.
+  IMPORTANT V2 FIX:
+  BufferGeometryUtils.mergeVertices() hashes every vertex attribute. Calling it
+  on the original GLB geometry therefore does NOT weld hard-edge split vertices
+  when their normals / UVs differ. V2 first creates a POSITION-ONLY geometry,
+  then welds coincident positions, then recomputes one averaged normal field.
+  That is required for a genuinely continuous inverted hull at box corners.
+
+  Existing native LineSegments2 glow stays only as a hidden live style source,
+  so the calibrator's Glow controls continue to drive colour / opacity / width.
+  Path ribbons and crisp 1px architecture edges are untouched.
 */
 
 const BASE_LINE_PX = 7;
@@ -45,10 +50,6 @@ function pathOf(object) {
   return parts.reverse().join('/');
 }
 
-function sourcePathOf(mesh) {
-  return mesh.userData?.adamHullSourcePath || pathOf(mesh);
-}
-
 function isForced(path) {
   return FORCE_GLOW_PATHS.has(path);
 }
@@ -72,18 +73,43 @@ function isNativeArchitecturalGlow(line) {
   return parentPath.includes('Scene_1/Main_Group/clusters/');
 }
 
+function positionOnlyGeometry(source) {
+  const g = new THREE.BufferGeometry();
+  const position = source.getAttribute('position');
+  g.setAttribute('position', position.clone());
+
+  // Preserve triangle topology while intentionally dropping normal/uv/tangent/
+  // colour attributes so mergeVertices hashes POSITION ONLY.
+  if (source.index) g.setIndex(source.index.clone());
+
+  return g;
+}
+
 function hullGeometryFor(geometry) {
   const cached = hullGeoCache.get(geometry.uuid);
   if (cached) return cached;
 
-  const copy = geometry.clone();
-  // Normal expansion on hard-edge split vertices cracks boxes open. Weld the
-  // coincident positions first, then build one averaged normal per corner.
-  const welded = mergeVertices(copy, WELD_TOLERANCE);
-  welded.deleteAttribute('normal');
+  const positionOnly = positionOnlyGeometry(geometry);
+  const before = positionOnly.getAttribute('position')?.count || 0;
+  const welded = mergeVertices(positionOnly, WELD_TOLERANCE);
+  positionOnly.dispose();
+
+  // One shared averaged normal field across the welded topology is the core of
+  // the hull approach: hard-edge GLB normal splits must not survive here.
   welded.computeVertexNormals();
+  welded.normalizeNormals();
   welded.computeBoundingSphere();
   welded.computeBoundingBox();
+
+  const after = welded.getAttribute('position')?.count || 0;
+  welded.userData.adamHullWeld = {
+    sourceUuid:geometry.uuid,
+    before,
+    after,
+    merged:Math.max(0, before - after),
+    tolerance:WELD_TOLERANCE
+  };
+
   hullGeoCache.set(geometry.uuid, welded);
   return welded;
 }
@@ -102,10 +128,14 @@ function makeHullMaterial() {
         vec3 n = normal;
         #ifdef USE_INSTANCING
           p = (instanceMatrix * vec4(p, 1.0)).xyz;
+          // Correct for the overwhelmingly uniform instance transforms used by
+          // this GLB. Parent non-uniform scale is handled by normalMatrix below.
           n = normalize(mat3(instanceMatrix) * n);
         #endif
         vec3 viewNormal = normalize(normalMatrix * n);
         vec4 mv = modelViewMatrix * vec4(p, 1.0);
+        // View-space expansion gives a stable world-unit shell thickness without
+        // origin-based scale inflation.
         mv.xyz += viewNormal * uWidth;
         gl_Position = projectionMatrix * mv;
       }
@@ -140,10 +170,6 @@ function createHullObject(source, geometry, material, kind) {
     hull = new THREE.InstancedMesh(geometry, material, source.count);
     hull.instanceMatrix.copy(source.instanceMatrix);
     hull.instanceMatrix.needsUpdate = true;
-    if (source.instanceColor) {
-      hull.instanceColor = source.instanceColor.clone();
-      hull.instanceColor.needsUpdate = true;
-    }
   } else {
     hull = new THREE.Mesh(geometry, material);
   }
@@ -169,8 +195,6 @@ function installSource(source) {
   const halo = createHullObject(source, geometry, haloMat, 'halo');
   const inner = createHullObject(source, geometry, innerMat, 'inner');
 
-  // Siblings, not children: this avoids accidental double transforms and lets
-  // InstancedMesh hulls carry the same instanceMatrix explicitly.
   const parent = source.parent;
   if (!parent) {
     haloMat.dispose();
@@ -178,17 +202,15 @@ function installSource(source) {
     return;
   }
   parent.add(halo, inner);
-
   hullEntries.set(source.uuid, { source, path, halo, inner, haloMat, innerMat });
 }
 
-function syncInstanceState(entry) {
+function syncSourceState(entry) {
   const { source, halo, inner } = entry;
   copyTransform(source, halo);
   copyTransform(source, inner);
 
   if (source.isInstancedMesh && halo.isInstancedMesh && inner.isInstancedMesh) {
-    // Spline motion may alter instance matrices. Keep hulls locked to the source.
     halo.count = inner.count = source.count;
     halo.instanceMatrix.copy(source.instanceMatrix);
     inner.instanceMatrix.copy(source.instanceMatrix);
@@ -201,9 +223,7 @@ function findAndHideFatGlow(scene) {
   nativeGlowTemplate = null;
   scene.traverse(object => {
     if (!isNativeArchitecturalGlow(object)) return;
-    if (!nativeGlowTemplate && !object.userData?.adamSupplementalOuterGlow) {
-      nativeGlowTemplate = object;
-    }
+    if (!nativeGlowTemplate) nativeGlowTemplate = object;
     object.visible = false;
   });
 }
@@ -222,7 +242,7 @@ function syncStyles() {
   const visible = glowEnabled();
 
   for (const entry of hullEntries.values()) {
-    syncInstanceState(entry);
+    syncSourceState(entry);
 
     entry.innerMat.uniforms.uColor.value.copy(src.color || new THREE.Color('#b9e222'));
     entry.innerMat.uniforms.uOpacity.value = innerOpacity;
@@ -250,12 +270,19 @@ function install(scene) {
 
   const normal = [...hullEntries.values()].filter(e => !e.source.isInstancedMesh).length;
   const instanced = [...hullEntries.values()].filter(e => e.source.isInstancedMesh).length;
-  const summary = `${hullEntries.size}/${normal}/${instanced}`;
+  let before = 0, after = 0;
+  for (const geometry of hullGeoCache.values()) {
+    before += geometry.userData.adamHullWeld?.before || 0;
+    after += geometry.userData.adamHullWeld?.after || 0;
+  }
+
+  const summary = `${hullEntries.size}/${normal}/${instanced}/${before}/${after}`;
   if (summary !== lastSummary) {
     lastSummary = summary;
     console.info(
-      `[ADAM hull glow] installed ${hullEntries.size} sources ` +
-      `(${normal} Mesh, ${instanced} InstancedMesh); welded geometries=${hullGeoCache.size}`
+      `[ADAM hull glow V2] sources=${hullEntries.size} (${normal} Mesh, ${instanced} InstancedMesh); ` +
+      `geometry cache=${hullGeoCache.size}; welded vertices ${before} -> ${after} ` +
+      `(merged ${Math.max(0, before-after)})`
     );
   }
 }
@@ -267,13 +294,13 @@ function sync(scene) {
 }
 
 const previousRender = THREE.WebGLRenderer.prototype.render;
-THREE.WebGLRenderer.prototype.render = function adamArchitecturalHullGlowRender(scene, camera) {
+THREE.WebGLRenderer.prototype.render = function adamArchitecturalHullGlowV2Render(scene, camera) {
   sync(scene);
   return previousRender.call(this, scene, camera);
 };
 
 window.__ADAM_ARCHITECTURAL_HULL_GLOW = {
-  version:1,
+  version:2,
   entries:hullEntries,
   geometryCache:hullGeoCache,
   widths:{ baseInnerWorld:BASE_INNER_WORLD, haloMultiplier:HALO_WIDTH_MULTIPLIER },
