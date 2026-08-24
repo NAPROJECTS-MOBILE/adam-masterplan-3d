@@ -204,7 +204,16 @@ function loadFrames(frames) {
 }
 
 function setGroup(selector, values) {
-  const inputs = [...document.querySelectorAll(`${selector} input`)];
+  const host = document.querySelector(selector);
+  if (!host) return;
+
+  // Only use app-v2's direct control input from each generated .ctl wrapper.
+  // RGB helpers append three nested number inputs to colour wrappers; including
+  // those here shifts every following material/light value into the wrong field.
+  const inputs = [...host.children]
+    .map(wrap => wrap.querySelector(':scope > input'))
+    .filter(Boolean);
+
   values.forEach((value, index) => setInput(inputs[index], value, 'input'));
 }
 
