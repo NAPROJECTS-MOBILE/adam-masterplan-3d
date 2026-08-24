@@ -1,5 +1,4 @@
 import * as THREE from 'three';
-import './shadow-grounding-proxies.js?v=grounding-v1-20260825-0001';
 
 const DEFAULTS = {
   enabled:true,
@@ -68,7 +67,7 @@ function findSlab(scene) {
 function isArchitectureMesh(object) {
   if (!object?.isMesh || object.isLineSegments2) return false;
   if (object === slabMesh) return false;
-  if (object.userData?.adamGlowHull || object.userData?.adamShadowReceiver || object.userData?.adamShadowGroundProxy) return false;
+  if (object.userData?.adamGlowHull || object.userData?.adamShadowReceiver) return false;
   if (!object.geometry?.attributes?.position) return false;
   return pathOf(object).includes('Scene_1/Main_Group/clusters/');
 }
@@ -250,10 +249,8 @@ function updateStatus() {
   const fit = fittedFrustum
     ? ` · fitted ${fittedFrustum.width.toFixed(1)}×${fittedFrustum.height.toFixed(1)}`
     : '';
-  const grounding = window.__ADAM_SHADOW_GROUNDING;
-  const groundText = grounding?.proxyCount ? ` · ground proxies ${grounding.proxyCount}` : '';
   statusEl.textContent = state.enabled
-    ? `shadow V5 ACTIVE · hooks ${renderTicks} · ${architecture.length} casters · VSM ${state.mapSize}px × ${VSM_BLUR_SAMPLES} blur${fit} · map ${shadowLight?.shadow?.map ? 'READY' : 'pending'}${groundText}`
+    ? `shadow V5 ACTIVE · hooks ${renderTicks} · ${architecture.length} casters · VSM ${state.mapSize}px × ${VSM_BLUR_SAMPLES} blur${fit} · map ${shadowLight?.shadow?.map ? 'READY' : 'pending'}`
     : 'shadow calibration disabled';
 }
 
