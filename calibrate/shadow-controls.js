@@ -13,7 +13,7 @@ const DEFAULTS = {
 };
 
 const SHADOW_LIGHT_INTENSITY = 0.001;
-const VSM_BLUR_SAMPLES = 16;
+const VSM_BLUR_SAMPLES = 8;
 const FRUSTUM_PADDING = 0.08;
 const DEPTH_PADDING = 1.0;
 
