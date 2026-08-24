@@ -21,7 +21,7 @@
       <div class="row quarter-jumps" id="quarterJumps">
         <button data-pct="0">0</button><button data-pct="25">25</button><button data-pct="50">50</button><button data-pct="75">75</button><button data-pct="100">100</button>
       </div>
-      <p class="scroll-hint">Production mapping: 0% = .h-scroll starts, 25% = cluster 2, 50% = cluster 3, 75% = cluster 4; 75–100% holds cluster 4 unless you add another keyframe.</p>
+      <p class="scroll-hint">Saved baseline mapping: 0/25/50/75/100% correspond to the five approved Preview 5 camera states. Desktop and mobile have independent saved frames.</p>
     </div>
 
     <h2>Keyframe</h2>
@@ -88,7 +88,7 @@
 
     <h2>Export</h2>
     <button class="btn" id="copyBtn">Copy KEYFRAMES + STYLE</button>
-    <button class="btn ghost" id="resetBtn">Reset to preset</button>
+    <button class="btn ghost" id="resetBtn">Reset to saved baseline</button>
     <textarea id="out" readonly></textarea>
 
     <h2>Status</h2><div id="status">booting…</div>
@@ -114,5 +114,6 @@
 <script type="module" src="./calibrate/keyframe-add-unlock.js?v=20260820-1553"></script>
 <script type="module" src="./calibrate/responsive-keyframes.js?v=20260820-2312"></script>
 <script type="module" src="./calibrate/rgb-color-controls.js?v=20260821-0004"></script>
+<script type="module" src="./calibrate/saved-baseline.js?v=preview5-baseline-20260824-1500"></script>
 </body>
 </html>
