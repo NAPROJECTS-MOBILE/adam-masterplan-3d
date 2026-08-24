@@ -25,6 +25,7 @@ let contentRadius = 10;
 let slabMesh = null;
 let statusEl = null;
 let uiBound = false;
+let renderTicks = 0;
 
 const $ = id => document.getElementById(id);
 
@@ -125,6 +126,7 @@ function syncReceiverToSlab() {
 
 function makeShadowLight(scene) {
   shadowLight = new THREE.DirectionalLight(0xffffff, SHADOW_LIGHT_INTENSITY);
+  shadowLight.name = 'ADAM_Shadow_Directional';
   shadowLight.castShadow = true;
   shadowLight.target.name = 'ADAM_Shadow_Target';
   shadowLight.shadow.mapSize.set(state.mapSize, state.mapSize);
@@ -168,8 +170,12 @@ function updateReadouts() {
 function updateStatus() {
   statusEl = statusEl || $('shadowStatus');
   if (!statusEl) return;
+  if (!installed) {
+    statusEl.textContent = 'shadow module loaded · waiting for first renderer hook…';
+    return;
+  }
   statusEl.textContent = state.enabled
-    ? `shadow module active · ${architecture.length} casters · receiver ${slabMesh ? 'base slab' : 'fallback'} · map ${state.mapSize}px`
+    ? `shadow module ACTIVE · render hooks ${renderTicks} · ${architecture.length} casters · receiver ${slabMesh ? 'base slab' : 'fallback'} · shadow map ${shadowLight?.shadow?.map ? 'READY' : 'pending'} · ${state.mapSize}px`
     : 'shadow calibration disabled';
 }
 
@@ -247,22 +253,24 @@ function install(renderer, scene) {
   makeReceiver(scene);
   makeShadowLight(scene);
   applyState(renderer);
-  console.info('[ADAM shadows V3]', { casters:architecture.length, slab:slabMesh?.name || null });
+  console.info('[ADAM shadows V4 hook install]', { casters:architecture.length, slab:slabMesh?.name || null });
 }
 
-requestAnimationFrame(bindUI);
+function beforeRender(renderer, scene) {
+  renderTicks++;
+  install(renderer, scene);
+  applyState(renderer);
+}
 
-const previousRender = THREE.WebGLRenderer.prototype.render;
-THREE.WebGLRenderer.prototype.render = function adamShadowCalibrationV3Render(scene, camera) {
-  install(this, scene);
-  applyState(this);
-  return previousRender.call(this, scene, camera);
-};
+bindUI();
+window.__ADAM_BEFORE_RENDER_HOOKS = window.__ADAM_BEFORE_RENDER_HOOKS || [];
+window.__ADAM_BEFORE_RENDER_HOOKS.push(beforeRender);
 
 window.__ADAM_SHADOW_CALIBRATOR = {
-  version:3,
+  version:4,
   state,
   defaults:DEFAULTS,
+  get renderTicks(){ return renderTicks; },
   get light(){ return shadowLight; },
   get receiver(){ return receiver; },
   get slab(){ return slabMesh; },
