@@ -1,17 +1,30 @@
 import * as THREE from 'three';
 
-/* ADAM architectural glow — stencil de-accumulation + independent diagnostics */
+/*
+  ADAM architectural glow — stencil de-accumulation V4
+  ----------------------------------------------------
+  Three r160 assigns renderer.render as an OWN instance function, so the old
+  prototype-render interception never executed. V4 runs through the proven
+  calibrator renderer bridge (__ADAM_BEFORE_RENDER_HOOKS).
 
-const INNER_REF = 1;
-const OUTER_REF = 2;
-const PATCH_TAG = 'adamArchitecturalStencilDestackV3';
+  Goal: preserve the existing LineSegments2 glow appearance on straight runs,
+  but allow each architectural glow layer to contribute only once per pixel.
+  Shared endpoints/caps therefore cannot add 3x/6x brightness at corners.
+
+  Path ribbons are untouched: they use NormalBlending and live under /paths/.
+*/
+
+const INNER_BIT = 0x1;
+const OUTER_BIT = 0x2;
+const PATCH_TAG = 'adamArchitecturalStencilDestackV4';
 const TEST_MODE = new URLSearchParams(location.search).get('stenciltest') === '1';
 const MATERIALS = new Set();
+
 let checkedContext = false;
 let contextStencil = null;
 let stencilBits = null;
 let lastStats = null;
-let diagnosticEl = null;
+let renderTicks = 0;
 
 function pathOf(object) {
   const parts = [];
@@ -25,6 +38,7 @@ function pathOf(object) {
 
 function isArchitecturalGlow(line) {
   if (!line?.isLineSegments2 || !line.material) return false;
+  if (line.userData?.adamPathRailLayer) return false;
   if (line.material.blending !== THREE.AdditiveBlending) return false;
   const parentPath = line.parent ? pathOf(line.parent) : '';
   return parentPath.includes('Scene_1/Main_Group/clusters/');
@@ -34,78 +48,46 @@ function glowLayer(line) {
   return line.userData?.adamSupplementalOuterGlow ? 'outer' : 'inner';
 }
 
-function ensureDiagnosticPanel() {
-  if (diagnosticEl?.isConnected) return diagnosticEl;
-  diagnosticEl = document.createElement('div');
-  diagnosticEl.id = 'adamStencilDiagnostic';
-  Object.assign(diagnosticEl.style, {
-    position:'fixed', left:'14px', bottom:'14px', zIndex:'99999',
-    width:'min(520px, calc(100vw - 380px))', minWidth:'340px',
-    padding:'10px 12px', border:'1px solid #c8f542', borderRadius:'4px',
-    background:'rgba(8,8,8,.94)', color:'#e8e8e8',
-    font:'11px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace',
-    whiteSpace:'pre-wrap', pointerEvents:'none', boxShadow:'0 8px 30px rgba(0,0,0,.28)'
-  });
-  document.body.appendChild(diagnosticEl);
-  return diagnosticEl;
-}
-
-function configureStencil(material, ref, layer) {
+function configureStencil(material, bit, layer) {
   if (!material) return;
+
   material.stencilWrite = true;
-  material.stencilWriteMask = 0xff;
-  material.stencilFuncMask = 0xff;
-  material.stencilRef = ref;
+  material.stencilRef = bit;
+  material.stencilWriteMask = bit;
+  material.stencilFuncMask = bit;
   material.stencilFunc = THREE.NotEqualStencilFunc;
   material.stencilFail = THREE.KeepStencilOp;
   material.stencilZFail = THREE.KeepStencilOp;
   material.stencilZPass = THREE.ReplaceStencilOp;
 
+  // Optional binary proof: force the architecture inner glow fully opaque. If
+  // stencil is working, corner brightness should still equal straight-run
+  // brightness instead of accumulating at shared endpoints.
   if (TEST_MODE) material.opacity = layer === 'inner' ? 1.0 : 0.0;
 
   material.userData = {
     ...(material.userData || {}),
     [PATCH_TAG]: layer,
-    adamStencilRef: ref,
+    adamStencilBit: bit,
     adamStencilBinaryTest: TEST_MODE
   };
   material.needsUpdate = true;
   MATERIALS.add(material);
 }
 
-function materialCheck(material, expectedRef) {
-  if (!material) return null;
-  return {
-    stencilWrite:material.stencilWrite === true,
-    ref:material.stencilRef,
-    refOK:material.stencilRef === expectedRef,
-    funcOK:material.stencilFunc === THREE.NotEqualStencilFunc,
-    zPassOK:material.stencilZPass === THREE.ReplaceStencilOp,
-    opacity:Number(material.opacity)
-  };
-}
-
-function bool(v) { return v ? 'YES' : 'NO'; }
-
-function publishPanel() {
-  if (!lastStats) return;
-  const el = ensureDiagnosticPanel();
-  const inner = lastStats.innerCheck;
-  const outer = lastStats.outerCheck;
-  const goodContext = !!lastStats.contextStencil && Number(lastStats.stencilBits) > 0;
-  const goodInner = !!inner?.stencilWrite && !!inner?.refOK && !!inner?.funcOK && !!inner?.zPassOK;
-  const goodOuter = lastStats.outerLines === 0 || (!!outer?.stencilWrite && !!outer?.refOK && !!outer?.funcOK && !!outer?.zPassOK);
-
-  el.style.borderColor = goodContext && goodInner && goodOuter ? '#c8f542' : '#ff625f';
-  el.innerHTML = [
-    `<strong style="color:${goodContext && goodInner && goodOuter ? '#c8f542' : '#ff625f'}">STENCIL DIAGNOSTIC V3${TEST_MODE ? ' · BINARY TEST ACTIVE' : ''}</strong>`,
-    `live WebGL context stencil: ${bool(lastStats.contextStencil)} · STENCIL_BITS: ${lastStats.stencilBits ?? '?'}`,
-    `inner architecture: ${lastStats.innerLines} lines · write ${bool(inner?.stencilWrite)} · ref ${inner?.ref ?? '?'} · refOK ${bool(inner?.refOK)} · NotEqual ${bool(inner?.funcOK)} · Replace ${bool(inner?.zPassOK)} · opacity ${inner?.opacity ?? '?'}`,
-    `outer halo: ${lastStats.outerLines} lines · write ${bool(outer?.stencilWrite)} · ref ${outer?.ref ?? '?'} · refOK ${bool(outer?.refOK)} · NotEqual ${bool(outer?.funcOK)} · Replace ${bool(outer?.zPassOK)} · opacity ${outer?.opacity ?? '?'}`,
-    TEST_MODE
-      ? 'BINARY TEST: inner architectural glow forced to 1.0; outer architectural halo forced to 0. Compare a bad corner directly with a long straight run.'
-      : 'NORMAL MODE: approved Preview 5 appearance remains active.'
-  ].join('<br>');
+function verifyContext(renderer) {
+  if (checkedContext) return;
+  checkedContext = true;
+  try {
+    const gl = renderer.getContext();
+    const attrs = gl.getContextAttributes?.();
+    contextStencil = attrs?.stencil === true;
+    stencilBits = Number(gl.getParameter(gl.STENCIL_BITS) || 0);
+  } catch (error) {
+    contextStencil = false;
+    stencilBits = 0;
+    console.warn('[ADAM glow stencil V4] context query failed', error);
+  }
 }
 
 function configureScene(scene) {
@@ -120,61 +102,51 @@ function configureScene(scene) {
     if (layer === 'outer') {
       outerLines++;
       outerMaterials.add(line.material);
-      configureStencil(line.material, OUTER_REF, 'outer');
+      configureStencil(line.material, OUTER_BIT, 'outer');
     } else {
       innerLines++;
       innerMaterials.add(line.material);
-      configureStencil(line.material, INNER_REF, 'inner');
+      configureStencil(line.material, INNER_BIT, 'inner');
     }
   });
 
-  const innerMaterial = innerMaterials.values().next().value || null;
-  const outerMaterial = outerMaterials.values().next().value || null;
   lastStats = {
+    renderTicks,
     testMode:TEST_MODE,
     contextStencil,
     stencilBits,
     innerLines,
     outerLines,
     innerMaterials:innerMaterials.size,
-    outerMaterials:outerMaterials.size,
-    innerCheck:materialCheck(innerMaterial, INNER_REF),
-    outerCheck:materialCheck(outerMaterial, OUTER_REF)
+    outerMaterials:outerMaterials.size
   };
-  publishPanel();
-}
 
-function verifyContext(renderer) {
-  if (checkedContext) return;
-  checkedContext = true;
-  try {
-    const gl = renderer.getContext();
-    const attrs = gl.getContextAttributes?.();
-    contextStencil = attrs?.stencil === true;
-    stencilBits = Number(gl.getParameter(gl.STENCIL_BITS) || 0);
-    console.log('[ADAM stencil V3] contextAttributes.stencil =', contextStencil);
-    console.log('[ADAM stencil V3] STENCIL_BITS =', stencilBits);
-  } catch (error) {
-    contextStencil = false;
-    stencilBits = 0;
-    console.warn('[ADAM stencil V3] context query failed', error);
+  const status = document.getElementById('architecturalGlowStatus');
+  if (status) {
+    const contextOK = !!contextStencil && Number(stencilBits) > 0;
+    status.textContent = contextOK
+      ? `glow stencil V4 ACTIVE · hooks ${renderTicks} · stencil ${stencilBits}-bit · ${innerLines} inner line layers${outerLines ? ` · ${outerLines} halo layers` : ''}${TEST_MODE ? ' · BINARY TEST' : ''}`
+      : `glow stencil V4 ERROR · renderer stencil buffer unavailable`;
   }
 }
 
-const previousRender = THREE.WebGLRenderer.prototype.render;
-THREE.WebGLRenderer.prototype.render = function adamArchitecturalStencilDestackV3Render(scene, camera) {
-  verifyContext(this);
-  this.autoClearStencil = true;
+function beforeRender(renderer, scene) {
+  renderTicks++;
+  verifyContext(renderer);
+  renderer.autoClearStencil = true;
   configureScene(scene);
-  return previousRender.call(this, scene, camera);
-};
+}
+
+window.__ADAM_BEFORE_RENDER_HOOKS = window.__ADAM_BEFORE_RENDER_HOOKS || [];
+window.__ADAM_BEFORE_RENDER_HOOKS.push(beforeRender);
 
 window.__ADAM_GLOW_STENCIL_DESTACK = {
-  version:3,
+  version:4,
   testMode:TEST_MODE,
-  refs:{inner:INNER_REF, outer:OUTER_REF},
+  bits:{ inner:INNER_BIT, outer:OUTER_BIT },
   materials:MATERIALS,
   stats:() => lastStats,
   contextStencil:() => contextStencil,
-  stencilBits:() => stencilBits
+  stencilBits:() => stencilBits,
+  get renderTicks(){ return renderTicks; }
 };
