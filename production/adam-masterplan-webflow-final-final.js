@@ -10,10 +10,12 @@ import * as THREE from 'three';
   - light grey, thinner strip edges
   - late-scroll dot ripple direction compensation
   - 90% scroll smoothing for the 3D camera timeline
+  - plan-space path rail de-duplication for thin GLB ribbon shells
 */
 
 await import('./adam-masterplan-webflow-final.js?v=complete-export-v1-20260825-1117');
 await import('./scroll-smoothing-90.js?v=smooth90-v1-20260825-1322');
+await import('../calibrate/path-rail-plan-dedupe.js?v=plan-dedupe-v1-20260825-1412');
 
 const FINAL_MOBILE_KEYFRAMES = [
   { scrollPct:0,   azimuth:29, elevation:32, zoom:0.02, panX:-0.44, panZ:0.00, motionProgress:0.000, ease:'easeInOut' },
@@ -89,6 +91,7 @@ function installFinalState(api) {
     __adamIndependentPulseDefaultsApplied:true
   });
   window.__ADAM_REBUILD_PATH_RAILS?.();
+  window.__ADAM_PATH_RAIL_PLAN_DEDUPE?.run?.();
 
   findRippleUniforms(api.scene);
 
@@ -108,19 +111,20 @@ function installFinalState(api) {
     api.completeExport.STRIP_STYLE = FINAL_STRIP_STYLE;
   }
 
-  api.version = 'webflow-final-final-smooth90-20260825-1322';
+  api.version = 'webflow-final-final-smooth90-dedupe-20260825-1412';
   api.finalFinal = {
     mobileKeyframes:FINAL_MOBILE_KEYFRAMES,
     stripStyle:FINAL_STRIP_STYLE,
     rippleDirectionSwitchPct:RIPPLE_DIRECTION_SWITCH_PCT,
-    scrollSmoothing:0.90
+    scrollSmoothing:0.90,
+    pathRailPlanDedupe:true
   };
 
   const root = document.querySelector('[data-adam-masterplan-v15-preview]');
   if (root) root.dataset.adamVersion = api.version;
 
   installed = true;
-  console.info('[ADAM Webflow FINAL FINAL + smooth90] applied', api.finalFinal);
+  console.info('[ADAM Webflow FINAL FINAL + smooth90 + path dedupe] applied', api.finalFinal);
   return true;
 }
 
