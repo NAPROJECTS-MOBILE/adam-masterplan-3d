@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import './path-pulse-flow.js?v=smooth-individual-v3-20260825-0959';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { LineSegments2 } from 'three/addons/lines/LineSegments2.js';
 import { LineSegmentsGeometry } from 'three/addons/lines/LineSegmentsGeometry.js';
