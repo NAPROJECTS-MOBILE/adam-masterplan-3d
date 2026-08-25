@@ -21,10 +21,12 @@ const TARGET_PATHS = [
   'Scene_1/Main_Group/clusters/cluster_4_/Group_2/mesh_6_instance_10'
 ];
 
-const DEFAULT_OFFSET = 0.20;
-const MIN_OFFSET = -2.0;
-const MAX_OFFSET = 2.0;
-const STEP = 0.02;
+// This GLB is authored at a large world scale (other accepted corrections are
+// tens of units, e.g. +26). Sub-unit movement is visually negligible here.
+const DEFAULT_OFFSET = 0;
+const MIN_OFFSET = -30;
+const MAX_OFFSET = 30;
+const STEP = 0.25;
 const RECEIVER_BASELINE = 0.025;
 const WORLD_UP = new THREE.Vector3(0, 1, 0);
 const tmpWorld = new THREE.Vector3();
@@ -64,8 +66,9 @@ function resolve(scene) {
 
   updateStatus();
 
-  console.info('[ADAM M01-M13 height calibrator V4 WORLD-Y]', {
+  console.info('[ADAM M01-M13 height calibrator V5 WORLD-Y LARGE SCALE]', {
     offset,
+    range:[MIN_OFFSET, MAX_OFFSET],
     found: entries.filter(entry => !!entry.node).length,
     total: TARGET_PATHS.length,
     targets: entries.map(entry => ({
@@ -86,7 +89,7 @@ function ensureControl() {
   const wrap = document.createElement('div');
   wrap.className = 'ctl';
   wrap.innerHTML = `
-    <label>M01–M13 building height<span id="cluster4ShadowHeightV" data-v>+${DEFAULT_OFFSET.toFixed(2)}</span></label>
+    <label>M01–M13 building height<span id="cluster4ShadowHeightV" data-v>0.00</span></label>
     <input id="cluster4ShadowHeight" type="range" min="${MIN_OFFSET}" max="${MAX_OFFSET}" step="${STEP}" value="${DEFAULT_OFFSET}">
     <div id="cluster4ShadowHeightStatus" class="scroll-hint">M01–M13 resolving…</div>
   `;
@@ -106,7 +109,7 @@ function updateStatus() {
     return;
   }
   const found = entries.filter(entry => !!entry.node).length;
-  status.textContent = `M01–M13 targets found ${found}/${TARGET_PATHS.length} · WORLD Y`;
+  status.textContent = `M01–M13 targets found ${found}/${TARGET_PATHS.length} · WORLD Y · ±30 units`;
 }
 
 function restoreReceiverBaselineOnce() {
@@ -181,9 +184,10 @@ window.__ADAM_BEFORE_RENDER_HOOKS = window.__ADAM_BEFORE_RENDER_HOOKS || [];
 window.__ADAM_BEFORE_RENDER_HOOKS.push(beforeRender);
 
 window.__ADAM_CLUSTER4_SHADOW_HEIGHT = {
-  version:4,
+  version:5,
   targetPaths:TARGET_PATHS,
   receiverBaseline:RECEIVER_BASELINE,
+  range:[MIN_OFFSET, MAX_OFFSET],
   get offset(){ return offset; },
   set offset(value){
     offset = Math.max(MIN_OFFSET, Math.min(MAX_OFFSET, Number(value) || 0));
