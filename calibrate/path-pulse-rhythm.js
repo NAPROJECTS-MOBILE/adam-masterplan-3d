@@ -3,11 +3,11 @@ import { LineSegments2 } from 'three/addons/lines/LineSegments2.js';
 import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 
 /*
-  ADAM path pulse rhythm V1
+  ADAM path pulse rhythm V2
   -------------------------
-  Replaces the synchronized travelling pulse with sparse, independent whole-strip
-  illumination hits: quick attack, soft decay, irregular timing, shuffled strip
-  selection. The approved base strip edge/glow remains underneath and unchanged.
+  Independent whole-strip illumination hits: quick attack, soft decay,
+  irregular timing, shuffled strip selection. V2 keeps the accepted rhythm
+  exactly the same but opens up much more brightness/rate headroom.
 */
 
 const DEFAULTS = {
@@ -17,8 +17,9 @@ const DEFAULTS = {
   pulseStagger:0.78     // repurposed as timing/strength randomness (0..1)
 };
 
-const MIN_INTERVAL = 0.12;
-const MAX_SIMULTANEOUS = 3;
+// Higher-capacity limits so the widened controls are real, not cosmetic.
+const MIN_INTERVAL = 0.045;      // supports > 20 scheduling opportunities/sec
+const MAX_SIMULTANEOUS = 8;      // lets faster rhythms overlap naturally
 const overlays = new Map();
 let currentEntries = [];
 let queue = [];
@@ -86,9 +87,11 @@ function configureControls(style) {
   if (toggle) toggle.textContent = 'Independent strip pulse';
 
   const speed = document.getElementById('pathPulseSpeed');
-  if (speed) { speed.min = '0.15'; speed.max = '4'; speed.step = '0.05'; }
+  if (speed) { speed.min = '0.15'; speed.max = '12'; speed.step = '0.10'; }
   const width = document.getElementById('pathPulseWidth');
   if (width) { width.min = '0.15'; width.max = '1.8'; width.step = '0.05'; }
+  const strength = document.getElementById('pathPulseStrength');
+  if (strength) { strength.min = '0'; strength.max = '1'; strength.step = '0.01'; }
   const stagger = document.getElementById('pathPulseStagger');
   if (stagger) { stagger.min = '0'; stagger.max = '1'; stagger.step = '0.02'; }
 
@@ -160,10 +163,14 @@ function buildOverlays(entries) {
 
   refillQueue(entries.length);
   nextHitAt = performance.now() * 0.001 + 0.15;
-  console.info('[ADAM independent strip pulse V1]', {
+  console.info('[ADAM independent strip pulse V2]', {
     ribbons:entries.length,
     overlays:overlays.size,
-    defaults:DEFAULTS
+    defaults:DEFAULTS,
+    maxRateControl:12,
+    maxBrightnessControl:1,
+    minInterval:MIN_INTERVAL,
+    maxSimultaneous:MAX_SIMULTANEOUS
   });
 }
 
@@ -311,7 +318,7 @@ window.__ADAM_BEFORE_RENDER_HOOKS = window.__ADAM_BEFORE_RENDER_HOOKS || [];
 window.__ADAM_BEFORE_RENDER_HOOKS.push(beforeRender);
 
 window.__ADAM_PATH_PULSE_RHYTHM = {
-  version:1,
+  version:2,
   defaults:DEFAULTS,
   get frames(){ return frames; },
   get overlays(){ return overlays; },
