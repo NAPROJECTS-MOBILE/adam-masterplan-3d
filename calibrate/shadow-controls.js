@@ -8,7 +8,7 @@ const DEFAULTS = {
   softness:3.0,
   bias:-0.00035,
   normalBias:0.02,
-  receiverOffset:0.005,
+  receiverOffset:0.025,
   mapSize:4096
 };
 
@@ -245,8 +245,8 @@ function ensureReceiverOffsetControl() {
   const wrap = document.createElement('div');
   wrap.className = 'ctl';
   wrap.innerHTML = `
-    <label>Shadow receiver height<span id="shadowReceiverOffsetV" data-v>+0.005</span></label>
-    <input id="shadowReceiverOffset" type="range" min="-0.1" max="0.1" step="0.001" value="0.005">
+    <label>Shadow receiver height<span id="shadowReceiverOffsetV" data-v>+0.025</span></label>
+    <input id="shadowReceiverOffset" type="range" min="-0.1" max="0.1" step="0.001" value="0.025">
   `;
   root.insertBefore(wrap, reset);
 }
