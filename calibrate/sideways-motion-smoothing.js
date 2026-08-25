@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import './cluster4-shadow-height-calibrator.js?v=m01-m13-height-v3-20260825-0127';
+import './cluster4-shadow-height-calibrator.js?v=m01-m13-world-y-v4-20260825-0131';
 
 // ADAM calibrator — light temporal smoothing for the two horizontal ambient
 // movers only. The authoritative Spline motion still writes the target X each
