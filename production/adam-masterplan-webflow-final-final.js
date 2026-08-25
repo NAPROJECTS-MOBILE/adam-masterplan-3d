@@ -3,15 +3,9 @@ import * as THREE from 'three';
 /*
   ADAM MASTERPLAN — WEBFLOW FINAL FINAL
   ------------------------------------
-  Small final override layer on top of the complete production runtime.
-  Keeps all accepted architecture glow / shadow / pulse machinery in the
-  production modules and applies only the final approved deltas:
-  - mobile frame 05 azimuth/pan
-  - light grey, thinner strip edges
-  - late-scroll dot ripple direction compensation
-  - 90% scroll smoothing for the 3D camera timeline
-  - one visible centre rail per long straight ribbon mesh, any plan direction
-  - shell/bevel duplicate collapse inside every remaining ribbon entry
+  Current authoritative website baseline, 25 Aug 2026.
+  Keeps the accepted renderer/shadow/glow machinery and the route-geometry
+  cleanup, then applies the latest exported calibrator values.
 */
 
 await import('./adam-masterplan-webflow-final.js?v=complete-export-v1-20260825-1117');
@@ -27,18 +21,34 @@ const FINAL_MOBILE_KEYFRAMES = [
   { scrollPct:100, azimuth:44, elevation:37, zoom:0.08, panX:0.50,  panZ:0.31, motionProgress:0.000, ease:'easeInOut' }
 ];
 
+const FINAL_GLOBAL_GLOW = {
+  color:'#82ca2b',
+  opacity:0.24,
+  width:5.9,
+  strength:0.35
+};
+
 const FINAL_STRIP_STYLE = {
   edgeAngle:10,
   edgeColor:'#cccccc',
-  edgeOpacity:0.67,
+  edgeOpacity:0.09,
   edgeWidth:0.25,
   glowColor:'#84c534',
   glowOpacity:0.076,
   glowWidth:1.3,
-  haloOpacity:0.03,
+  haloOpacity:0.032,
   haloWidth:1.2,
   edgesVisible:true,
-  glowVisible:true
+  glowVisible:true,
+  sourceOpacity:0.18
+};
+
+const FINAL_STRIP_PULSE_STYLE = {
+  enabled:true,
+  pulseSpeed:1,
+  pulseWidth:0.7,
+  pulseStrength:0.16,
+  pulseStagger:0.42
 };
 
 const RIPPLE_SPEED = 1.25;
@@ -46,6 +56,73 @@ const RIPPLE_DIRECTION_SWITCH_PCT = 63.6;
 
 let installed = false;
 let rippleUniforms = [];
+
+function pathOf(object) {
+  const parts = [];
+  for (let node = object; node; node = node.parent) if (node.name) parts.push(node.name);
+  return parts.reverse().join('/');
+}
+
+function eachMaterial(mesh, fn) {
+  if (!mesh?.material) return;
+  if (Array.isArray(mesh.material)) mesh.material.forEach(fn);
+  else fn(mesh.material);
+}
+
+function applyArchitecturalGlow(api) {
+  api.model?.traverse?.(line => {
+    if (!line?.isLineSegments2 || !line.material || line.userData?.adamPathRailLayer) return;
+    const parentPath = line.parent ? pathOf(line.parent) : '';
+    if (!parentPath.includes('Scene_1/Main_Group/clusters/')) return;
+    if (line.material.blending !== THREE.AdditiveBlending) return;
+
+    line.material.color?.set?.(FINAL_GLOBAL_GLOW.color);
+    line.material.opacity = FINAL_GLOBAL_GLOW.opacity * FINAL_GLOBAL_GLOW.strength;
+    line.material.linewidth = FINAL_GLOBAL_GLOW.width;
+    line.material.needsUpdate = true;
+  });
+}
+
+function applySourceOpacity() {
+  const opacity = FINAL_STRIP_STYLE.sourceOpacity;
+  const refs = window.__ADAM_PATH_RIBBON_REFS;
+  if (!Array.isArray(refs)) return;
+
+  for (const entry of refs) {
+    const mesh = entry?.mesh;
+    if (!mesh?.isMesh || !mesh.material) continue;
+
+    // Own these materials before changing opacity in case the GLB reuses a
+    // material elsewhere in the scene.
+    if (!mesh.userData?.adamWebsiteSourceOpacityOwned) {
+      const clone = material => {
+        if (!material) return material;
+        const copy = material.clone?.() || material;
+        copy.userData = { ...(copy.userData || {}) };
+        copy.userData.adamWebsiteOriginalOpacity = Number.isFinite(Number(material.opacity)) ? Number(material.opacity) : 1;
+        copy.userData.adamWebsiteOriginalTransparent = !!material.transparent;
+        copy.userData.adamWebsiteOriginalDepthWrite = material.depthWrite !== false;
+        return copy;
+      };
+
+      mesh.material = Array.isArray(mesh.material)
+        ? mesh.material.map(clone)
+        : clone(mesh.material);
+      mesh.userData = { ...(mesh.userData || {}), adamWebsiteSourceOpacityOwned:true };
+    }
+
+    eachMaterial(mesh, material => {
+      const originalOpacity = Number.isFinite(Number(material.userData?.adamWebsiteOriginalOpacity))
+        ? Number(material.userData.adamWebsiteOriginalOpacity)
+        : 1;
+      material.transparent = true;
+      material.opacity = originalOpacity * opacity;
+      material.depthTest = true;
+      material.depthWrite = false;
+      material.needsUpdate = true;
+    });
+  }
+}
 
 function findRippleUniforms(scene) {
   rippleUniforms = [];
@@ -80,24 +157,33 @@ function installFinalState(api) {
     glowWidth:FINAL_STRIP_STYLE.glowWidth,
     haloOpacity:FINAL_STRIP_STYLE.haloOpacity,
     haloWidth:FINAL_STRIP_STYLE.haloWidth,
+    sourceOpacity:FINAL_STRIP_STYLE.sourceOpacity,
     edgesVisible:FINAL_STRIP_STYLE.edgesVisible,
     glowVisible:FINAL_STRIP_STYLE.glowVisible,
-    pulseEnabled:true,
-    pulseSpeed:8.05,
-    pulseWidth:0.85,
-    pulseStrength:0.76,
-    pulseStagger:0.42,
+    pulseEnabled:FINAL_STRIP_PULSE_STYLE.enabled,
+    pulseSpeed:FINAL_STRIP_PULSE_STYLE.pulseSpeed,
+    pulseWidth:FINAL_STRIP_PULSE_STYLE.pulseWidth,
+    pulseStrength:FINAL_STRIP_PULSE_STYLE.pulseStrength,
+    pulseStagger:FINAL_STRIP_PULSE_STYLE.pulseStagger,
     __adamFlowV3DefaultsApplied:true,
     __adamIndependentPulseDefaultsApplied:true
   });
 
+  // Build once from the source geometry, then apply both cleanup passes.
   window.__ADAM_REBUILD_PATH_RAILS?.();
   window.__ADAM_PATH_STRAIGHT_CENTRELINES?.run?.();
   window.__ADAM_PATH_RIBBON_SHELL_COLLAPSE?.run?.();
 
+  applySourceOpacity();
+  applyArchitecturalGlow(api);
   findRippleUniforms(api.scene);
 
-  const rippleDirectionHook = () => {
+  const finalStyleHook = () => {
+    // Reassert only the values that other runtime modules can legitimately
+    // touch after initialization.
+    applyArchitecturalGlow(api);
+    applySourceOpacity();
+
     if (!rippleUniforms.length) findRippleUniforms(api.scene);
     const late = currentScrollPct(api) >= RIPPLE_DIRECTION_SWITCH_PCT;
     const signedSpeed = late ? RIPPLE_SPEED : -RIPPLE_SPEED;
@@ -105,18 +191,30 @@ function installFinalState(api) {
   };
 
   window.__ADAM_BEFORE_RENDER_HOOKS = window.__ADAM_BEFORE_RENDER_HOOKS || [];
-  window.__ADAM_BEFORE_RENDER_HOOKS.push(rippleDirectionHook);
-  rippleDirectionHook();
+  window.__ADAM_BEFORE_RENDER_HOOKS.push(finalStyleHook);
+  finalStyleHook();
 
+  // Keep exposed/exported runtime state truthful for debugging and handoff.
+  if (api.style) {
+    api.style.glowWidth = FINAL_GLOBAL_GLOW.width;
+    api.style.glowStrength = FINAL_GLOBAL_GLOW.strength;
+  }
   if (api.completeExport) {
     api.completeExport.MOBILE_KEYFRAMES = FINAL_MOBILE_KEYFRAMES;
     api.completeExport.STRIP_STYLE = FINAL_STRIP_STYLE;
+    api.completeExport.STRIP_PULSE_STYLE = FINAL_STRIP_PULSE_STYLE;
+    if (api.completeExport.STYLE) {
+      api.completeExport.STYLE.glowWidth = FINAL_GLOBAL_GLOW.width;
+      api.completeExport.STYLE.glowStrength = FINAL_GLOBAL_GLOW.strength;
+    }
   }
 
-  api.version = 'webflow-final-final-smooth90-shell-collapse-20260825-2332';
+  api.version = 'webflow-final-final-latest-baseline-20260825-2348';
   api.finalFinal = {
     mobileKeyframes:FINAL_MOBILE_KEYFRAMES,
+    globalGlow:FINAL_GLOBAL_GLOW,
     stripStyle:FINAL_STRIP_STYLE,
+    stripPulseStyle:FINAL_STRIP_PULSE_STYLE,
     rippleDirectionSwitchPct:RIPPLE_DIRECTION_SWITCH_PCT,
     scrollSmoothing:0.90,
     straightRibbonCentrelines:true,
@@ -127,7 +225,7 @@ function installFinalState(api) {
   if (root) root.dataset.adamVersion = api.version;
 
   installed = true;
-  console.info('[ADAM Webflow FINAL FINAL + shell collapse] applied', api.finalFinal);
+  console.info('[ADAM Webflow FINAL FINAL — latest baseline] applied', api.finalFinal);
   return true;
 }
 
