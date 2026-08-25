@@ -1,11 +1,11 @@
 import * as THREE from 'three';
 
 /*
-  ADAM MASTERPLAN — WEBFLOW FINAL WRAPPER
-  ---------------------------------------
-  Loads the accepted Preview 5 runtime, then layers in the accepted calibrator
-  fixes/effects and applies the supplied final global STYLE without requiring
-  any calibrator UI.
+  ADAM MASTERPLAN — WEBFLOW FINAL / COMPLETE CALIBRATOR EXPORT
+  ------------------------------------------------------------
+  Exact exported state supplied 25 Aug 2026.
+  Includes camera, global STYLE, Material 2, base plate, shadows,
+  static strip styling, independent strip pulse and feature state.
 */
 
 const DESKTOP_KEYFRAMES = [
@@ -45,11 +45,11 @@ const STYLE = {
   glowStrength:0.3,
   glowExpansion:0,
   dotColor:'#141414',
-  dotDensity:20.45,
+  dotDensity:24.95,
   dotSize:0.0275,
   dotEdgeSoftness:0.012,
   dotSkew:0.5,
-  dotFadedOpacity:0.05,
+  dotFadedOpacity:0,
   dotActiveOpacity:0.34,
   rippleSpeed:-1.25,
   rippleFrequency:0.35,
@@ -64,11 +64,68 @@ const STYLE = {
   keyTint:'#ffffff'
 };
 
+const MATERIAL_2_STYLE = {
+  face:'#ebebeb',
+  faceTint:0.7,
+  faceLift:0.35,
+  faceOpacity:0.94,
+  faceRoughness:0.97,
+  faceMetalness:0
+};
+
+const BASE_PLATE_STYLE = { scale:1 };
+
+const SHADOW_STYLE = {
+  enabled:true,
+  azimuth:180,
+  elevation:62,
+  darkness:0.04,
+  softness:2,
+  bias:-0.00035,
+  normalBias:0.02,
+  receiverOffset:0.025,
+  mapSize:4096,
+  blurSamples:8,
+  filter:'VSM'
+};
+
+const STRIP_STYLE = {
+  edgeAngle:10,
+  edgeColor:'#242424',
+  edgeOpacity:0.14,
+  edgeWidth:1,
+  glowColor:'#84c534',
+  glowOpacity:0.076,
+  glowWidth:1.3,
+  haloOpacity:0.03,
+  haloWidth:1.2,
+  edgesVisible:true,
+  glowVisible:true
+};
+
+const STRIP_PULSE_STYLE = {
+  enabled:true,
+  pulseSpeed:8.05,
+  pulseWidth:0.85,
+  pulseStrength:0.76,
+  pulseStagger:0.42
+};
+
+const FEATURE_STATE = {
+  shadows:true,
+  edges:true,
+  glow:true,
+  dots:true,
+  animateDots:true,
+  stripEdges:true,
+  stripGlow:true,
+  stripPulse:true,
+  architecturalGlowStencil:true
+};
+
 function pathOf(object) {
   const parts = [];
-  for (let node = object; node; node = node.parent) {
-    if (node.name) parts.push(node.name);
-  }
+  for (let node = object; node; node = node.parent) if (node.name) parts.push(node.name);
   return parts.reverse().join('/');
 }
 
@@ -77,27 +134,101 @@ function eachMaterial(mesh, fn) {
   else if (mesh.material) fn(mesh.material);
 }
 
-function applyFinalStyle(api) {
-  if (!api?.scene || !api?.model || !api?.renderer || api.__finalWebflowStyleApplied) return false;
-  api.__finalWebflowStyleApplied = true;
+// The calibrator strip renderer historically waits for a handful of calibrator
+// controls before it creates the dedicated rail layers. Webflow has no panel,
+// so provide an invisible compatibility host. This is the key difference that
+// lets production use the exact same strip renderer as calibrate.
+function ensureHeadlessStripBootstrap() {
+  if (document.getElementById('pathEdgeColor') && document.getElementById('tEdges') && document.getElementById('tGlow')) return;
+  const host = document.createElement('div');
+  host.hidden = true;
+  host.setAttribute('aria-hidden', 'true');
+  host.innerHTML = `
+    <input id="pathEdgeColor" type="color" value="#242424">
+    <button id="tEdges" class="on" type="button"></button>
+    <button id="tGlow" class="on" type="button"></button>
+  `;
+  document.body.appendChild(host);
+}
 
-  // Camera keyframes — mutate in-place because the runtime closes over arrays.
+ensureHeadlessStripBootstrap();
+
+// Install renderer-hook modules before the renderer exists.
+await import('../calibrate/shadow-controls.js?v=webflow-complete-shadow-v1-20260825-1108');
+await import('../calibrate/glow-stencil-destack.js?v=webflow-complete-glow-lock-v1-20260825-1108');
+await import('../calibrate/sideways-motion-smoothing.js?v=webflow-complete-sideways-v1-20260825-1108');
+
+// Seed exact shadow state BEFORE the first renderer hook installs the light.
+if (window.__ADAM_SHADOW_CALIBRATOR?.state) {
+  Object.assign(window.__ADAM_SHADOW_CALIBRATOR.state, {
+    enabled:SHADOW_STYLE.enabled,
+    azimuth:SHADOW_STYLE.azimuth,
+    elevation:SHADOW_STYLE.elevation,
+    darkness:SHADOW_STYLE.darkness,
+    softness:SHADOW_STYLE.softness,
+    bias:SHADOW_STYLE.bias,
+    normalBias:SHADOW_STYLE.normalBias,
+    receiverOffset:SHADOW_STYLE.receiverOffset,
+    mapSize:SHADOW_STYLE.mapSize
+  });
+}
+
+// Preview 5 supplies the accepted entry-progress scroll mapping and captures
+// the path GLTF before the base runtime mutates the hierarchy.
+await import('./adam-masterplan-v1.5-preview5.js?v=webflow-complete-base-v1-20260825-1108');
+
+// Seed static strip + independent pulse BEFORE the first render. The two guard
+// flags stop the older travelling-flow helper and rhythm module from replacing
+// this exported pulse state with their own historical defaults.
+if (window.__ADAM_PATH_RIBBON_STYLE) {
+  Object.assign(window.__ADAM_PATH_RIBBON_STYLE, {
+    edgeColor:STRIP_STYLE.edgeColor,
+    edgeOpacity:STRIP_STYLE.edgeOpacity,
+    edgeWidth:STRIP_STYLE.edgeWidth,
+    glowColor:STRIP_STYLE.glowColor,
+    glowOpacity:STRIP_STYLE.glowOpacity,
+    glowWidth:STRIP_STYLE.glowWidth,
+    haloOpacity:STRIP_STYLE.haloOpacity,
+    haloWidth:STRIP_STYLE.haloWidth,
+    edgesVisible:STRIP_STYLE.edgesVisible,
+    glowVisible:STRIP_STYLE.glowVisible,
+    pulseEnabled:STRIP_PULSE_STYLE.enabled,
+    pulseSpeed:STRIP_PULSE_STYLE.pulseSpeed,
+    pulseWidth:STRIP_PULSE_STYLE.pulseWidth,
+    pulseStrength:STRIP_PULSE_STYLE.pulseStrength,
+    pulseStagger:STRIP_PULSE_STYLE.pulseStagger,
+    __adamFlowV3DefaultsApplied:true,
+    __adamIndependentPulseDefaultsApplied:true
+  });
+}
+
+await import('../calibrate/path-pulse-rhythm.js?v=webflow-complete-independent-rhythm-v1-20260825-1108');
+
+function applyCompleteState(api) {
+  if (!api?.scene || !api?.model || !api?.renderer || api.__completeExportApplied) return false;
+  api.__completeExportApplied = true;
+
   api.desktopKeyframes.splice(0, api.desktopKeyframes.length, ...DESKTOP_KEYFRAMES);
   api.mobileKeyframes.splice(0, api.mobileKeyframes.length, ...MOBILE_KEYFRAMES);
 
   api.renderer.toneMappingExposure = STYLE.exposure;
   api.scene.background = new THREE.Color(STYLE.background);
+  api.setBaseScale?.(BASE_PLATE_STYLE.scale);
 
-  // Building material changes. Face/tint are already the same white/.7 blend
-  // used by the base runtime; this pass applies the supplied lift/opacity/etc.
   const material2Meshes = api.material2Meshes || new Set();
+
+  // Main building material. Base runtime already used the same #fff / .7 tint,
+  // so preserve its correct blended colour and apply the exported live values.
   api.model.traverse(object => {
     if (!object?.isMesh || material2Meshes.has(object)) return;
-    const path = pathOf(object);
-    if (!path.includes('Scene_1/Main_Group/clusters/')) return;
+    const p = pathOf(object);
+    if (!p.includes('Scene_1/Main_Group/clusters/')) return;
     eachMaterial(object, material => {
       if (!material || material.isLineMaterial || material.isShaderMaterial) return;
-      if (material.emissive) material.emissiveIntensity = Math.max(0, STYLE.faceLift);
+      if (material.emissive && material.color) {
+        material.emissive.copy(material.color);
+        material.emissiveIntensity = STYLE.faceLift;
+      }
       if ('roughness' in material) material.roughness = STYLE.faceRoughness;
       if ('metalness' in material) material.metalness = STYLE.faceMetalness;
       material.transparent = true;
@@ -106,32 +237,50 @@ function applyFinalStyle(api) {
     });
   });
 
-  // Architectural line appearance. Path ribbons advertise adamPathRailLayer and
-  // are deliberately excluded — their accepted independent strip styling stays.
+  // Material 2 used the same #ebebeb/.7 tint in the base runtime; apply the
+  // changed lift and all remaining exported material properties exactly.
+  for (const mesh of material2Meshes) {
+    eachMaterial(mesh, material => {
+      if (!material) return;
+      if (material.emissive && material.color) {
+        material.emissive.copy(material.color);
+        material.emissiveIntensity = MATERIAL_2_STYLE.faceLift;
+      }
+      if ('roughness' in material) material.roughness = MATERIAL_2_STYLE.faceRoughness;
+      if ('metalness' in material) material.metalness = MATERIAL_2_STYLE.faceMetalness;
+      material.transparent = true;
+      material.opacity = MATERIAL_2_STYLE.faceOpacity;
+      material.needsUpdate = true;
+    });
+  }
+
+  // Architecture edges + glow only. Strip layers identify themselves and are
+  // deliberately excluded so their dedicated exported style stays authoritative.
   api.model.traverse(line => {
     if (!line?.isLineSegments2 || !line.material || line.userData?.adamPathRailLayer) return;
     const parentPath = line.parent ? pathOf(line.parent) : '';
     if (!parentPath.includes('Scene_1/Main_Group/clusters/')) return;
 
-    const material = line.material;
-    if (material.blending === THREE.AdditiveBlending) {
-      material.color?.set?.(STYLE.glow);
-      material.opacity = THREE.MathUtils.clamp(STYLE.glowOpacity * STYLE.glowStrength, 0, 1);
-      material.linewidth = STYLE.glowWidth;
+    if (line.material.blending === THREE.AdditiveBlending) {
+      line.material.color?.set?.(STYLE.glow);
+      line.material.opacity = STYLE.glowOpacity * STYLE.glowStrength;
+      line.material.linewidth = STYLE.glowWidth;
+      line.visible = FEATURE_STATE.glow;
     } else {
-      material.color?.set?.(STYLE.edge);
-      material.opacity = STYLE.edgeOpacity;
-      material.linewidth = STYLE.edgeWidth;
+      line.material.color?.set?.(STYLE.edge);
+      line.material.opacity = STYLE.edgeOpacity;
+      line.material.linewidth = STYLE.edgeWidth;
+      line.visible = FEATURE_STATE.edges;
     }
-    material.needsUpdate = true;
+    line.material.needsUpdate = true;
   });
 
-  // Lighting.
+  // Lighting. Ignore the almost-zero dedicated shadow light by name.
   const hemis = [];
   const directionals = [];
   api.scene.traverse(object => {
     if (object?.isHemisphereLight) hemis.push(object);
-    if (object?.isDirectionalLight) directionals.push(object);
+    if (object?.isDirectionalLight && object.name !== 'ADAM_Shadow_Directional') directionals.push(object);
   });
   for (const light of hemis) light.intensity = STYLE.hemisphere;
   if (directionals[0]) {
@@ -143,12 +292,10 @@ function applyFinalStyle(api) {
     directionals[1].intensity = STYLE.rim;
   }
 
-  // Dot shader — set every exported value so the embed really is a complete
-  // representation of the supplied STYLE object.
+  // Dot shader + visibility.
   api.scene.traverse(object => {
-    const material = object?.material;
-    const uniforms = material?.uniforms;
-    if (!uniforms?.uRippleSoft || !uniforms?.uDotColor) return;
+    const uniforms = object?.material?.uniforms;
+    if (!uniforms?.uDotColor || !uniforms?.uRippleSoft) return;
     uniforms.uDotColor.value.set(STYLE.dotColor);
     uniforms.uSpacing.value = 2 / Math.max(0.05, STYLE.dotDensity);
     uniforms.uDotSize.value = STYLE.dotSize;
@@ -161,46 +308,74 @@ function applyFinalStyle(api) {
     uniforms.uRippleWidth.value = STYLE.rippleWidth;
     uniforms.uRippleSoft.value = STYLE.rippleSoftness;
     uniforms.uRippleOrigin.value.set(STYLE.rippleOriginX, STYLE.rippleOriginZ);
+    uniforms.uAnimate.value = FEATURE_STATE.animateDots ? 1 : 0;
+    object.visible = FEATURE_STATE.dots;
   });
 
+  // Re-assert strip state and rebuild once the captured rail sources exist.
+  if (window.__ADAM_PATH_RIBBON_STYLE) {
+    Object.assign(window.__ADAM_PATH_RIBBON_STYLE, {
+      edgeColor:STRIP_STYLE.edgeColor,
+      edgeOpacity:STRIP_STYLE.edgeOpacity,
+      edgeWidth:STRIP_STYLE.edgeWidth,
+      glowColor:STRIP_STYLE.glowColor,
+      glowOpacity:STRIP_STYLE.glowOpacity,
+      glowWidth:STRIP_STYLE.glowWidth,
+      haloOpacity:STRIP_STYLE.haloOpacity,
+      haloWidth:STRIP_STYLE.haloWidth,
+      edgesVisible:FEATURE_STATE.stripEdges,
+      glowVisible:FEATURE_STATE.stripGlow,
+      pulseEnabled:FEATURE_STATE.stripPulse && STRIP_PULSE_STYLE.enabled,
+      pulseSpeed:STRIP_PULSE_STYLE.pulseSpeed,
+      pulseWidth:STRIP_PULSE_STYLE.pulseWidth,
+      pulseStrength:STRIP_PULSE_STYLE.pulseStrength,
+      pulseStagger:STRIP_PULSE_STYLE.pulseStagger,
+      __adamFlowV3DefaultsApplied:true,
+      __adamIndependentPulseDefaultsApplied:true
+    });
+    window.__ADAM_REBUILD_PATH_RAILS?.();
+  }
+
+  // Re-assert shadow state in case install occurred during async model boot.
+  if (window.__ADAM_SHADOW_CALIBRATOR?.state) {
+    Object.assign(window.__ADAM_SHADOW_CALIBRATOR.state, {
+      enabled:FEATURE_STATE.shadows && SHADOW_STYLE.enabled,
+      azimuth:SHADOW_STYLE.azimuth,
+      elevation:SHADOW_STYLE.elevation,
+      darkness:SHADOW_STYLE.darkness,
+      softness:SHADOW_STYLE.softness,
+      bias:SHADOW_STYLE.bias,
+      normalBias:SHADOW_STYLE.normalBias,
+      receiverOffset:SHADOW_STYLE.receiverOffset,
+      mapSize:SHADOW_STYLE.mapSize
+    });
+  }
+
   api.style = STYLE;
-  api.version = 'webflow-final-20260825';
-  api.finalStyle = STYLE;
-  api.finalDesktopKeyframes = DESKTOP_KEYFRAMES;
-  api.finalMobileKeyframes = MOBILE_KEYFRAMES;
+  Object.assign(api.material2Style || {}, MATERIAL_2_STYLE);
+  api.version = 'webflow-complete-export-20260825-1108';
+  api.completeExport = {
+    DESKTOP_KEYFRAMES,
+    MOBILE_KEYFRAMES,
+    STYLE,
+    MATERIAL_2_STYLE,
+    BASE_PLATE_STYLE,
+    SHADOW_STYLE,
+    STRIP_STYLE,
+    STRIP_PULSE_STYLE,
+    FEATURE_STATE
+  };
 
   const root = document.querySelector('[data-adam-masterplan-v15-preview]');
   if (root) root.dataset.adamVersion = api.version;
 
-  console.info('[ADAM Webflow final] style applied', {
-    desktopFrames:DESKTOP_KEYFRAMES.length,
-    mobileFrames:MOBILE_KEYFRAMES.length,
-    edgeOpacity:STYLE.edgeOpacity,
-    edgeWidth:STYLE.edgeWidth,
-    glow:STYLE.glow,
-    glowOpacity:STYLE.glowOpacity,
-    faceLift:STYLE.faceLift,
-    faceOpacity:STYLE.faceOpacity
-  });
+  console.info('[ADAM Webflow complete export] applied', api.completeExport);
   return true;
 }
 
-// Install render-hook modules before the renderer boots.
-await import('../calibrate/shadow-controls.js?v=webflow-final-shadow-v5-20260825');
-await import('../calibrate/glow-stencil-destack.js?v=webflow-final-glow-lock-v4-20260825');
-await import('../calibrate/sideways-motion-smoothing.js?v=webflow-final-sideways-v1-20260825');
-
-// Preview 5 imports path-ribbon-glow before loading the GLB, preserving the
-// proven strip geometry capture and the approved entry-progress scroll mapping.
-await import('./adam-masterplan-v1.5-preview5.js?v=webflow-final-base-20260825');
-
-// Independent electric whole-strip pulse. Imported after the base wrapper; it
-// self-initializes from the captured strip layers on the next renderer hook.
-await import('../calibrate/path-pulse-rhythm.js?v=independent-rhythm-v2-20260825-1025');
-
-if (!applyFinalStyle(window.__adamMasterplanV15Preview)) {
+if (!applyCompleteState(window.__adamMasterplanV15Preview)) {
   const timer = setInterval(() => {
-    if (applyFinalStyle(window.__adamMasterplanV15Preview)) clearInterval(timer);
+    if (applyCompleteState(window.__adamMasterplanV15Preview)) clearInterval(timer);
   }, 25);
   setTimeout(() => clearInterval(timer), 20000);
 }
