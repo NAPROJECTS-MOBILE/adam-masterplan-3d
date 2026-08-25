@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { LineSegmentsGeometry } from 'three/addons/lines/LineSegmentsGeometry.js';
+import './path-ribbon-shell-collapse.js?v=shell-collapse-v1-20260825-2332';
 
 /*
   ADAM long straight path centreline cleanup V3
@@ -65,7 +66,6 @@ function straightnessInfo(source) {
   const lambda1 = Math.max(0, (trace + root) * 0.5);
   const lambda2 = Math.max(1e-12, (trace - root) * 0.5);
 
-  // Principal direction of lambda1.
   let dirX = xz;
   let dirZ = lambda1 - xx;
   if (Math.abs(dirX) + Math.abs(dirZ) < 1e-9) {
@@ -105,7 +105,6 @@ function localAxisInfo(source) {
   const size = box.getSize(new THREE.Vector3());
   const ext = [Math.abs(size.x), Math.abs(size.y), Math.abs(size.z)];
 
-  // Find the local axis that maps most strongly to world vertical Y.
   const e = source.matrixWorld.elements;
   const worldYContribution = [Math.abs(e[1]), Math.abs(e[5]), Math.abs(e[9])];
   let verticalAxis = 0;
@@ -256,6 +255,7 @@ function wrapRebuild() {
   window.__ADAM_REBUILD_PATH_RAILS = function adamRebuildWithStraightCentrelines(...args) {
     const result = original.apply(this, args);
     applyCentrelineFix();
+    window.__ADAM_PATH_RIBBON_SHELL_COLLAPSE?.run?.();
     return result;
   };
   wrapped = true;
@@ -264,6 +264,7 @@ function wrapRebuild() {
 function install() {
   wrapRebuild();
   applyCentrelineFix();
+  window.__ADAM_PATH_RIBBON_SHELL_COLLAPSE?.run?.();
 }
 
 install();
@@ -275,11 +276,14 @@ const timer = setInterval(() => {
 }, 25);
 
 const api = {
-  version:3,
-  run:applyCentrelineFix,
+  version:3.1,
+  run(){
+    const result = applyCentrelineFix();
+    window.__ADAM_PATH_RIBBON_SHELL_COLLAPSE?.run?.();
+    return result;
+  },
   get stats(){ return lastStats; }
 };
 
 window.__ADAM_PATH_STRAIGHT_CENTRELINES = api;
-// Backward-compatible name used by the current production/calibrator wrappers.
 window.__ADAM_CENTRAL_PATH_CENTRELINES = api;
