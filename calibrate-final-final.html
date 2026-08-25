@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>ADAM masterplan — final-final calibrator</title>
+  <style>
+    html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#111}
+    iframe{display:block;width:100%;height:100%;border:0}
+  </style>
+</head>
+<body>
+  <iframe id="cal" src="./calibrate.html?v=final-final-base-20260825-1653" title="ADAM final-final calibrator"></iframe>
+  <script>
+    const frame = document.getElementById('cal');
+    frame.addEventListener('load', () => {
+      const doc = frame.contentDocument;
+      const win = frame.contentWindow;
+      if (!doc || !win) return;
+
+      const loadModule = src => new Promise((resolve, reject) => {
+        const script = doc.createElement('script');
+        script.type = 'module';
+        script.src = src;
+        script.onload = resolve;
+        script.onerror = reject;
+        doc.body.appendChild(script);
+      });
+
+      const base = win.location.href;
+      loadModule(new URL('./calibrate/path-central-centerlines.js?v=straight-centrelines-v3-20260825-1653', base).href)
+        .then(() => loadModule(new URL('./calibrate/final-final-calibrator-sync.js?v=website-state-v1-20260825-1653', base).href))
+        .catch(error => console.error('[ADAM final-final calibrator wrapper]', error));
+    });
+  </script>
+</body>
+</html>
