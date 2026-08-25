@@ -13,10 +13,12 @@ const DEFAULT_OFFSET = 0.20;
 const MIN_OFFSET = -2.0;
 const MAX_OFFSET = 2.0;
 const STEP = 0.02;
+const RECEIVER_BASELINE = 0.025;
 
 let entries = null;
 let offset = DEFAULT_OFFSET;
 let uiBound = false;
+let receiverBaselineApplied = false;
 
 const $ = id => document.getElementById(id);
 
@@ -71,6 +73,19 @@ function updateReadout() {
   if (readout) readout.textContent = `${offset >= 0 ? '+' : ''}${offset.toFixed(2)}`;
 }
 
+function restoreReceiverBaselineOnce() {
+  if (receiverBaselineApplied) return;
+  const shadow = window.__ADAM_SHADOW_CALIBRATOR;
+  if (!shadow?.state) return;
+
+  shadow.state.receiverOffset = RECEIVER_BASELINE;
+  const input = $('shadowReceiverOffset');
+  if (input) input.value = RECEIVER_BASELINE;
+  const readout = $('shadowReceiverOffsetV');
+  if (readout) readout.textContent = `+${RECEIVER_BASELINE.toFixed(3)}`;
+  receiverBaselineApplied = true;
+}
+
 function apply() {
   if (!entries) return;
   let changed = false;
@@ -106,11 +121,14 @@ function bindUI() {
 
 function beforeRender(renderer, scene) {
   bindUI();
+  restoreReceiverBaselineOnce();
+
   if (!entries) {
     resolve(scene);
     apply();
     return;
   }
+
   // Keep the calibrated Y position authoritative in case another scene helper
   // touches transforms later in the frame.
   apply();
@@ -121,8 +139,9 @@ window.__ADAM_BEFORE_RENDER_HOOKS = window.__ADAM_BEFORE_RENDER_HOOKS || [];
 window.__ADAM_BEFORE_RENDER_HOOKS.push(beforeRender);
 
 window.__ADAM_CLUSTER4_SHADOW_HEIGHT = {
-  version:1,
+  version:2,
   targetPaths:TARGET_PATHS,
+  receiverBaseline:RECEIVER_BASELINE,
   get offset(){ return offset; },
   set offset(value){
     offset = Math.max(MIN_OFFSET, Math.min(MAX_OFFSET, Number(value) || 0));
