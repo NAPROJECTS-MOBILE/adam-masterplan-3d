@@ -11,11 +11,13 @@ import * as THREE from 'three';
   - late-scroll dot ripple direction compensation
   - 90% scroll smoothing for the 3D camera timeline
   - one visible centre rail per long straight ribbon mesh, any plan direction
+  - shell/bevel duplicate collapse inside every remaining ribbon entry
 */
 
 await import('./adam-masterplan-webflow-final.js?v=complete-export-v1-20260825-1117');
 await import('./scroll-smoothing-90.js?v=smooth90-v1-20260825-1322');
 await import('../calibrate/path-central-centerlines.js?v=straight-centrelines-v3-20260825-1653');
+await import('../calibrate/path-ribbon-shell-collapse.js?v=shell-collapse-v1-20260825-2332');
 
 const FINAL_MOBILE_KEYFRAMES = [
   { scrollPct:0,   azimuth:29, elevation:32, zoom:0.02, panX:-0.44, panZ:0.00, motionProgress:0.000, ease:'easeInOut' },
@@ -91,6 +93,7 @@ function installFinalState(api) {
 
   window.__ADAM_REBUILD_PATH_RAILS?.();
   window.__ADAM_PATH_STRAIGHT_CENTRELINES?.run?.();
+  window.__ADAM_PATH_RIBBON_SHELL_COLLAPSE?.run?.();
 
   findRippleUniforms(api.scene);
 
@@ -110,20 +113,21 @@ function installFinalState(api) {
     api.completeExport.STRIP_STYLE = FINAL_STRIP_STYLE;
   }
 
-  api.version = 'webflow-final-final-smooth90-straight-centrelines-20260825-1653';
+  api.version = 'webflow-final-final-smooth90-shell-collapse-20260825-2332';
   api.finalFinal = {
     mobileKeyframes:FINAL_MOBILE_KEYFRAMES,
     stripStyle:FINAL_STRIP_STYLE,
     rippleDirectionSwitchPct:RIPPLE_DIRECTION_SWITCH_PCT,
     scrollSmoothing:0.90,
-    straightRibbonCentrelines:true
+    straightRibbonCentrelines:true,
+    ribbonShellCollapse:true
   };
 
   const root = document.querySelector('[data-adam-masterplan-v15-preview]');
   if (root) root.dataset.adamVersion = api.version;
 
   installed = true;
-  console.info('[ADAM Webflow FINAL FINAL + straight centrelines] applied', api.finalFinal);
+  console.info('[ADAM Webflow FINAL FINAL + shell collapse] applied', api.finalFinal);
   return true;
 }
 
