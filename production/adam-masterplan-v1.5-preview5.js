@@ -9,9 +9,9 @@
   - 0% when the section top first reaches the viewport bottom
   - 100% when the section bottom reaches the viewport bottom
 
-  This preserves the supplied 0/25/50/75/100 keyframes while moving their whole
-  timeline earlier, matching the original ADAM section behaviour described in
-  Webflow.
+  Optional smoothing:
+  - data-scroll-smoothing="0.90" retains 90% of the previous progress and
+    advances 10% toward the current scroll target per animation frame.
 */
 
 const DESKTOP_KEYFRAMES = [
@@ -40,10 +40,24 @@ await import('./adam-masterplan-v1.5-preview.js?v=c3de4c1400092453c86e58cf4467f4
 
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 const nativeRAF = window.requestAnimationFrame.bind(window);
+const scrollSmoothing = clamp(Number(root?.dataset?.scrollSmoothing || 0), 0, 0.99);
+let smoothedEntryProgress = null;
 
-function entryProgressForRect(rect) {
+function rawEntryProgressForRect(rect) {
   const height = Math.max(1, rect.height);
   return clamp((window.innerHeight - rect.top) / height, 0, 1);
+}
+
+function entryProgressForRect(rect) {
+  const target = rawEntryProgressForRect(rect);
+  if (scrollSmoothing <= 0) return target;
+
+  if (smoothedEntryProgress == null) {
+    smoothedEntryProgress = target;
+  } else {
+    smoothedEntryProgress += (target - smoothedEntryProgress) * (1 - scrollSmoothing);
+  }
+  return smoothedEntryProgress;
 }
 
 function syntheticRectForLegacyReader(realRect) {
@@ -101,6 +115,7 @@ function installEntryProgress(api) {
 
   const restartWrappedLoop = () => {
     api.performance.stop();
+    smoothedEntryProgress = null;
 
     const previousRAF = window.requestAnimationFrame;
     window.requestAnimationFrame = callback => scheduleWrapped(callback);
@@ -126,9 +141,14 @@ function installEntryProgress(api) {
   });
 
   api.entryProgress = () => entryProgressForRect(realGetBoundingClientRect()) * 100;
+  api.rawEntryProgress = () => rawEntryProgressForRect(realGetBoundingClientRect()) * 100;
   api.entryProgressMode = 'section-enters-viewport';
+  api.scrollSmoothing = scrollSmoothing;
 
-  if (root) root.dataset.scrollProgressMode = 'entry';
+  if (root) {
+    root.dataset.scrollProgressMode = 'entry';
+    root.dataset.scrollSmoothingActive = scrollSmoothing.toFixed(2);
+  }
   return true;
 }
 
@@ -158,6 +178,7 @@ function finish(api) {
     desktopFrames:api.desktopKeyframes.length,
     mobileFrames:api.mobileKeyframes.length,
     progressMode:'section enters viewport',
+    scrollSmoothing,
     stripSources:api.stripSources.length,
     stripRails:api.stripRails.length
   });
