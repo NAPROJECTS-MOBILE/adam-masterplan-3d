@@ -1,4 +1,6 @@
-// ADAM calibrator — exact M01–M13 vertical placement
+import * as THREE from 'three';
+
+// ADAM calibrator — exact M01–M13 world-space vertical placement
 // Raises/lowers ONLY the 13 user-confirmed cluster_4_ meshes whose shadows sit
 // too high against their lower edges. Their native edge/glow LineSegments2
 // objects are mesh children, so those locked visuals remain aligned.
@@ -24,6 +26,9 @@ const MIN_OFFSET = -2.0;
 const MAX_OFFSET = 2.0;
 const STEP = 0.02;
 const RECEIVER_BASELINE = 0.025;
+const WORLD_UP = new THREE.Vector3(0, 1, 0);
+const tmpWorld = new THREE.Vector3();
+const tmpLocal = new THREE.Vector3();
 
 let entries = null;
 let offset = DEFAULT_OFFSET;
@@ -41,6 +46,7 @@ function pathOf(object) {
 }
 
 function resolve(scene) {
+  scene.updateMatrixWorld(true);
   const byPath = new Map();
   scene.traverse(object => {
     const p = pathOf(object);
@@ -52,17 +58,21 @@ function resolve(scene) {
     return {
       path,
       node,
-      baseY: node?.position?.y ?? 0
+      baseWorld: node ? node.getWorldPosition(new THREE.Vector3()) : null
     };
   });
 
   updateStatus();
 
-  console.info('[ADAM M01-M13 height calibrator]', {
+  console.info('[ADAM M01-M13 height calibrator V4 WORLD-Y]', {
     offset,
     found: entries.filter(entry => !!entry.node).length,
     total: TARGET_PATHS.length,
-    targets: entries.map(entry => ({ path:entry.path, found:!!entry.node, baseY:entry.baseY }))
+    targets: entries.map(entry => ({
+      path:entry.path,
+      found:!!entry.node,
+      baseWorldY:entry.baseWorld?.y ?? null
+    }))
   });
 }
 
@@ -96,7 +106,7 @@ function updateStatus() {
     return;
   }
   const found = entries.filter(entry => !!entry.node).length;
-  status.textContent = `M01–M13 targets found ${found}/${TARGET_PATHS.length}`;
+  status.textContent = `M01–M13 targets found ${found}/${TARGET_PATHS.length} · WORLD Y`;
 }
 
 function restoreReceiverBaselineOnce() {
@@ -114,20 +124,25 @@ function restoreReceiverBaselineOnce() {
 
 function apply() {
   if (!entries) return;
-  let changed = false;
+
   for (const entry of entries) {
-    if (!entry.node) continue;
-    const desiredY = entry.baseY + offset;
-    if (Math.abs(entry.node.position.y - desiredY) > 1e-7) {
-      entry.node.position.y = desiredY;
-      entry.node.updateMatrix();
-      entry.node.matrixWorldNeedsUpdate = true;
-      changed = true;
+    const node = entry.node;
+    const parent = node?.parent;
+    if (!node || !parent || !entry.baseWorld) continue;
+
+    parent.updateWorldMatrix(true, false);
+    tmpWorld.copy(entry.baseWorld).addScaledVector(WORLD_UP, offset);
+    tmpLocal.copy(tmpWorld);
+    parent.worldToLocal(tmpLocal);
+
+    if (node.position.distanceToSquared(tmpLocal) > 1e-12) {
+      node.position.copy(tmpLocal);
+      node.updateMatrix();
+      node.matrixWorldNeedsUpdate = true;
     }
   }
-  if (changed) {
-    for (const entry of entries) entry.node?.updateMatrixWorld?.(true);
-  }
+
+  for (const entry of entries) entry.node?.updateMatrixWorld?.(true);
   updateReadout();
 }
 
@@ -156,8 +171,8 @@ function beforeRender(renderer, scene) {
     return;
   }
 
-  // Run immediately before renderer.render so this Y placement remains
-  // authoritative even if another scene helper touched transforms earlier.
+  // Keep exact world-space Y placement authoritative immediately before the
+  // native render/shadow pass.
   apply();
 }
 
@@ -166,7 +181,7 @@ window.__ADAM_BEFORE_RENDER_HOOKS = window.__ADAM_BEFORE_RENDER_HOOKS || [];
 window.__ADAM_BEFORE_RENDER_HOOKS.push(beforeRender);
 
 window.__ADAM_CLUSTER4_SHADOW_HEIGHT = {
-  version:3,
+  version:4,
   targetPaths:TARGET_PATHS,
   receiverBaseline:RECEIVER_BASELINE,
   get offset(){ return offset; },
