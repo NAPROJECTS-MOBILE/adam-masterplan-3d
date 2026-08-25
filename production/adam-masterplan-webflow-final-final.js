@@ -9,9 +9,11 @@ import * as THREE from 'three';
   - mobile frame 05 azimuth/pan
   - light grey, thinner strip edges
   - late-scroll dot ripple direction compensation
+  - 90% scroll smoothing for the 3D camera timeline
 */
 
 await import('./adam-masterplan-webflow-final.js?v=complete-export-v1-20260825-1117');
+await import('./scroll-smoothing-90.js?v=smooth90-v1-20260825-1322');
 
 const FINAL_MOBILE_KEYFRAMES = [
   { scrollPct:0,   azimuth:29, elevation:32, zoom:0.02, panX:-0.44, panZ:0.00, motionProgress:0.000, ease:'easeInOut' },
@@ -36,9 +38,6 @@ const FINAL_STRIP_STYLE = {
 };
 
 const RIPPLE_SPEED = 1.25;
-// Both desktop and mobile pan through world X=0 between frames 03 and 04.
-// Flipping world-space wave propagation at that crossing keeps the perceived
-// screen-space direction continuous instead of appearing to reverse late on.
 const RIPPLE_DIRECTION_SWITCH_PCT = 63.6;
 
 let installed = false;
@@ -55,7 +54,7 @@ function findRippleUniforms(scene) {
 }
 
 function currentScrollPct(api) {
-  const p = Number(api?.progress?.());
+  const p = Number(api?.smoothedEntryProgress?.() ?? api?.progress?.());
   if (Number.isFinite(p)) return p;
   const root = document.querySelector('[data-adam-masterplan-v15-preview]');
   const datasetPct = Number(root?.dataset?.scrollPct);
@@ -81,7 +80,6 @@ function installFinalState(api) {
     haloWidth:FINAL_STRIP_STYLE.haloWidth,
     edgesVisible:FINAL_STRIP_STYLE.edgesVisible,
     glowVisible:FINAL_STRIP_STYLE.glowVisible,
-    // Keep the already-approved independent pulse settings intact.
     pulseEnabled:true,
     pulseSpeed:8.05,
     pulseWidth:0.85,
@@ -97,8 +95,6 @@ function installFinalState(api) {
   const rippleDirectionHook = () => {
     if (!rippleUniforms.length) findRippleUniforms(api.scene);
     const late = currentScrollPct(api) >= RIPPLE_DIRECTION_SWITCH_PCT;
-    // Early frames retain the exported -1.25. Late frames use +1.25 to
-    // compensate for viewing the opposite side of the radial ripple origin.
     const signedSpeed = late ? RIPPLE_SPEED : -RIPPLE_SPEED;
     for (const uniforms of rippleUniforms) uniforms.uRippleSpeed.value = signedSpeed;
   };
@@ -112,18 +108,19 @@ function installFinalState(api) {
     api.completeExport.STRIP_STYLE = FINAL_STRIP_STYLE;
   }
 
-  api.version = 'webflow-final-final-20260825-1136';
+  api.version = 'webflow-final-final-smooth90-20260825-1322';
   api.finalFinal = {
     mobileKeyframes:FINAL_MOBILE_KEYFRAMES,
     stripStyle:FINAL_STRIP_STYLE,
-    rippleDirectionSwitchPct:RIPPLE_DIRECTION_SWITCH_PCT
+    rippleDirectionSwitchPct:RIPPLE_DIRECTION_SWITCH_PCT,
+    scrollSmoothing:0.90
   };
 
   const root = document.querySelector('[data-adam-masterplan-v15-preview]');
   if (root) root.dataset.adamVersion = api.version;
 
   installed = true;
-  console.info('[ADAM Webflow FINAL FINAL] applied', api.finalFinal);
+  console.info('[ADAM Webflow FINAL FINAL + smooth90] applied', api.finalFinal);
   return true;
 }
 
