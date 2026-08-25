@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import './cluster4-shadow-height-calibrator.js?v=m01-m13-world-y-v5-20260825-0136';
+import './cluster4-shadow-height-calibrator.js?v=m01-m13-wrapper-v6-20260825-0922';
 
 // ADAM calibrator — light temporal smoothing for the two horizontal ambient
 // movers only. The authoritative Spline motion still writes the target X each
@@ -12,7 +12,7 @@ const TARGET_PATHS = [
   'Scene_1/Main_Group/clusters/cluster_2/building_3'
 ];
 
-const TAU_SECONDS = 0.055;      // deliberately subtle: ~55 ms visual damping
+const TAU_SECONDS = 0.055;
 const RESUME_SNAP_SECONDS = 0.12;
 const MAX_SNAP_DISTANCE = 18;
 
@@ -37,17 +37,7 @@ function resolve(scene) {
 
   entries = TARGET_PATHS.map(path => {
     const node = byPath.get(path) || null;
-    return {
-      path,
-      node,
-      smoothX: node?.position?.x ?? 0,
-      ready: !!node
-    };
-  });
-
-  console.info('[ADAM sideways smoothing]', {
-    tauMs: TAU_SECONDS * 1000,
-    targets: entries.map(e => ({ path:e.path, found:!!e.node }))
+    return { path, node, smoothX:node?.position?.x ?? 0, ready:!!node };
   });
 }
 
@@ -56,26 +46,22 @@ function beforeRender(renderer, scene) {
   if (!entries) resolve(scene);
 
   const now = performance.now() * 0.001;
-  const dt = lastNow ? Math.max(0, now - lastNow) : 0;
+  const dt = lastNow ? Math.max(0, now-lastNow) : 0;
   lastNow = now;
 
   let changed = false;
   for (const entry of entries || []) {
     const node = entry.node;
     if (!node) continue;
-
-    // spline-motion has already written this frame's authoritative target.
     const targetX = node.position.x;
-
-    if (!entry.ready || dt <= 0 || dt > RESUME_SNAP_SECONDS || Math.abs(targetX - entry.smoothX) > MAX_SNAP_DISTANCE) {
+    if (!entry.ready || dt <= 0 || dt > RESUME_SNAP_SECONDS || Math.abs(targetX-entry.smoothX) > MAX_SNAP_DISTANCE) {
       entry.smoothX = targetX;
       entry.ready = true;
     } else {
-      const alpha = 1 - Math.exp(-dt / TAU_SECONDS);
-      entry.smoothX = THREE.MathUtils.lerp(entry.smoothX, targetX, alpha);
+      const alpha = 1-Math.exp(-dt/TAU_SECONDS);
+      entry.smoothX = THREE.MathUtils.lerp(entry.smoothX,targetX,alpha);
     }
-
-    if (Math.abs(node.position.x - entry.smoothX) > 1e-7) {
+    if (Math.abs(node.position.x-entry.smoothX) > 1e-7) {
       node.position.x = entry.smoothX;
       node.updateMatrix();
       node.matrixWorldNeedsUpdate = true;
