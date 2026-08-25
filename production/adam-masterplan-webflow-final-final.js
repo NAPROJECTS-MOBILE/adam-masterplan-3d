@@ -10,12 +10,12 @@ import * as THREE from 'three';
   - light grey, thinner strip edges
   - late-scroll dot ripple direction compensation
   - 90% scroll smoothing for the 3D camera timeline
-  - plan-space path rail de-duplication for thin GLB ribbon shells
+  - one visible centre rail per intended central ribbon mesh
 */
 
 await import('./adam-masterplan-webflow-final.js?v=complete-export-v1-20260825-1117');
 await import('./scroll-smoothing-90.js?v=smooth90-v1-20260825-1322');
-await import('../calibrate/path-rail-plan-dedupe.js?v=plan-dedupe-v1-20260825-1412');
+await import('../calibrate/path-central-centerlines.js?v=central-centrelines-v1-20260825-1428');
 
 const FINAL_MOBILE_KEYFRAMES = [
   { scrollPct:0,   azimuth:29, elevation:32, zoom:0.02, panX:-0.44, panZ:0.00, motionProgress:0.000, ease:'easeInOut' },
@@ -90,8 +90,11 @@ function installFinalState(api) {
     __adamFlowV3DefaultsApplied:true,
     __adamIndependentPulseDefaultsApplied:true
   });
+
+  // Build the ordinary path layers first, then replace only path1/path1_1/
+  // path1_2/path1_3 with one top-surface centre rail each.
   window.__ADAM_REBUILD_PATH_RAILS?.();
-  window.__ADAM_PATH_RAIL_PLAN_DEDUPE?.run?.();
+  window.__ADAM_CENTRAL_PATH_CENTRELINES?.run?.();
 
   findRippleUniforms(api.scene);
 
@@ -111,20 +114,20 @@ function installFinalState(api) {
     api.completeExport.STRIP_STYLE = FINAL_STRIP_STYLE;
   }
 
-  api.version = 'webflow-final-final-smooth90-dedupe-20260825-1412';
+  api.version = 'webflow-final-final-smooth90-centrelines-20260825-1428';
   api.finalFinal = {
     mobileKeyframes:FINAL_MOBILE_KEYFRAMES,
     stripStyle:FINAL_STRIP_STYLE,
     rippleDirectionSwitchPct:RIPPLE_DIRECTION_SWITCH_PCT,
     scrollSmoothing:0.90,
-    pathRailPlanDedupe:true
+    centralRibbonCentrelines:true
   };
 
   const root = document.querySelector('[data-adam-masterplan-v15-preview]');
   if (root) root.dataset.adamVersion = api.version;
 
   installed = true;
-  console.info('[ADAM Webflow FINAL FINAL + smooth90 + path dedupe] applied', api.finalFinal);
+  console.info('[ADAM Webflow FINAL FINAL + central centrelines] applied', api.finalFinal);
   return true;
 }
 
