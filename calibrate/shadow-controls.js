@@ -2,10 +2,10 @@ import * as THREE from 'three';
 
 const DEFAULTS = {
   enabled:true,
-  azimuth:42,
-  elevation:58,
-  darkness:0.35,
-  softness:3.0,
+  azimuth:180,
+  elevation:62,
+  darkness:0.04,
+  softness:2.0,
   bias:-0.00035,
   normalBias:0.02,
   receiverOffset:0.025,
@@ -396,9 +396,10 @@ window.__ADAM_BEFORE_RENDER_HOOKS = window.__ADAM_BEFORE_RENDER_HOOKS || [];
 window.__ADAM_BEFORE_RENDER_HOOKS.push(beforeRender);
 
 window.__ADAM_SHADOW_CALIBRATOR = {
-  version:5.2,
+  version:5.3,
   state,
   defaults:DEFAULTS,
+  blurSamples:VSM_BLUR_SAMPLES,
   get renderTicks(){ return renderTicks; },
   get fittedFrustum(){ return fittedFrustum; },
   get light(){ return shadowLight; },
