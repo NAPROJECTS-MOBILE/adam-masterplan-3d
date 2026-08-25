@@ -2,24 +2,22 @@ import * as THREE from 'three';
 import { LineSegmentsGeometry } from 'three/addons/lines/LineSegmentsGeometry.js';
 
 /*
-  ADAM horizontal corridor centreline cleanup
-  -------------------------------------------
-  The source GLB contains thin extruded ribbon meshes. EdgesGeometry exposes
-  several longitudinal shell/bevel edges per ribbon, which makes the main
-  horizontal corridor look like it has far more strips than it really does.
+  ADAM long straight path centreline cleanup V3
+  ----------------------------------------------
+  Thin extruded ribbon meshes expose several shell/bevel edges through
+  EdgesGeometry. For long straight route pieces that makes one intended ribbon
+  look like several parallel strips.
 
-  This pass identifies every long, near-horizontal path ribbon in WORLD plan
-  space and replaces only its generated rail geometry with one top-surface
-  centreline per source ribbon. Vertical/branching route pieces are left alone.
+  V3 detects long STRAIGHT ribbons in world X/Z using a simple 2D PCA, so the
+  cleanup works regardless of whether the ribbon runs horizontally, vertically
+  or diagonally in plan. Short junctions / bends are left untouched.
 */
 
-const HORIZONTAL_RATIO = 4.0;   // world X extent must dominate world Z extent
-const MIN_WORLD_LENGTH = 2.0;   // ignore tiny decorative fragments
+const MIN_WORLD_LENGTH = 2.0;
+const MIN_PLAN_ASPECT = 4.0;
 const GROUP_TOLERANCE_REL = 1e-6;
 
-const _box = new THREE.Box3();
-const _size = new THREE.Vector3();
-const _corner = new THREE.Vector3();
+const _world = new THREE.Vector3();
 
 let wrapped = false;
 let lastStats = null;
@@ -31,35 +29,71 @@ function replaceGeometry(line, geometry) {
   previous?.dispose?.();
 }
 
-function worldPlanExtents(source) {
-  source.updateWorldMatrix(true, false);
-  source.geometry.computeBoundingBox();
-  const local = source.geometry.boundingBox;
-  if (!local) return null;
+function straightnessInfo(source) {
+  const position = source?.geometry?.attributes?.position;
+  if (!position || position.count < 4) return null;
 
-  _box.makeEmpty();
-  for (let ix = 0; ix < 2; ix++) {
-    for (let iy = 0; iy < 2; iy++) {
-      for (let iz = 0; iz < 2; iz++) {
-        _corner.set(
-          ix ? local.max.x : local.min.x,
-          iy ? local.max.y : local.min.y,
-          iz ? local.max.z : local.min.z
-        ).applyMatrix4(source.matrixWorld);
-        _box.expandByPoint(_corner);
-      }
-    }
+  source.updateWorldMatrix(true, false);
+
+  let meanX = 0;
+  let meanZ = 0;
+  for (let i = 0; i < position.count; i++) {
+    _world.fromBufferAttribute(position, i).applyMatrix4(source.matrixWorld);
+    meanX += _world.x;
+    meanZ += _world.z;
   }
-  _box.getSize(_size);
-  return { x:Math.abs(_size.x), z:Math.abs(_size.z) };
+  meanX /= position.count;
+  meanZ /= position.count;
+
+  let xx = 0;
+  let xz = 0;
+  let zz = 0;
+  for (let i = 0; i < position.count; i++) {
+    _world.fromBufferAttribute(position, i).applyMatrix4(source.matrixWorld);
+    const dx = _world.x - meanX;
+    const dz = _world.z - meanZ;
+    xx += dx * dx;
+    xz += dx * dz;
+    zz += dz * dz;
+  }
+  xx /= position.count;
+  xz /= position.count;
+  zz /= position.count;
+
+  const trace = xx + zz;
+  const root = Math.sqrt(Math.max(0, (xx - zz) * (xx - zz) + 4 * xz * xz));
+  const lambda1 = Math.max(0, (trace + root) * 0.5);
+  const lambda2 = Math.max(1e-12, (trace - root) * 0.5);
+
+  // Principal direction of lambda1.
+  let dirX = xz;
+  let dirZ = lambda1 - xx;
+  if (Math.abs(dirX) + Math.abs(dirZ) < 1e-9) {
+    dirX = 1;
+    dirZ = 0;
+  }
+  const invLen = 1 / Math.max(1e-9, Math.hypot(dirX, dirZ));
+  dirX *= invLen;
+  dirZ *= invLen;
+
+  let minAlong = Infinity;
+  let maxAlong = -Infinity;
+  for (let i = 0; i < position.count; i++) {
+    _world.fromBufferAttribute(position, i).applyMatrix4(source.matrixWorld);
+    const along = (_world.x - meanX) * dirX + (_world.z - meanZ) * dirZ;
+    minAlong = Math.min(minAlong, along);
+    maxAlong = Math.max(maxAlong, along);
+  }
+
+  const length = Math.max(0, maxAlong - minAlong);
+  const aspect = Math.sqrt(lambda1 / lambda2);
+  return { length, aspect, dirX, dirZ };
 }
 
-function isHorizontalCorridor(entry) {
-  const source = entry?.source;
-  if (!source?.geometry?.attributes?.position) return false;
-  const ext = worldPlanExtents(source);
-  if (!ext) return false;
-  return ext.x >= MIN_WORLD_LENGTH && ext.x >= Math.max(0.001, ext.z) * HORIZONTAL_RATIO;
+function isLongStraightRibbon(entry) {
+  const info = straightnessInfo(entry?.source);
+  if (!info) return false;
+  return info.length >= MIN_WORLD_LENGTH && info.aspect >= MIN_PLAN_ASPECT;
 }
 
 function localAxisInfo(source) {
@@ -162,7 +196,7 @@ function geometryFromSegments(segments) {
 }
 
 function fixEntry(entry) {
-  if (!isHorizontalCorridor(entry)) return null;
+  if (!isLongStraightRibbon(entry)) return null;
 
   const before = entry.segmentData?.length || 0;
   const segments = centrelineSegments(entry.source);
@@ -184,10 +218,13 @@ function fixEntry(entry) {
     replaceGeometry(independent.core, entry.inner.geometry.clone());
   }
 
+  const info = straightnessInfo(entry.source);
   return {
     path:entry.originalPath,
     before,
     after:segments.length,
+    length:Number(info?.length?.toFixed?.(3) || 0),
+    aspect:Number(info?.aspect?.toFixed?.(2) || 0),
     changed:true
   };
 }
@@ -207,7 +244,7 @@ function applyCentrelineFix() {
     details
   };
 
-  console.info('[ADAM horizontal corridor centreline fix]', lastStats);
+  console.info('[ADAM long straight path centreline fix V3]', lastStats);
   return true;
 }
 
@@ -216,7 +253,7 @@ function wrapRebuild() {
   const original = window.__ADAM_REBUILD_PATH_RAILS;
   if (typeof original !== 'function') return;
 
-  window.__ADAM_REBUILD_PATH_RAILS = function adamRebuildWithHorizontalCentrelines(...args) {
+  window.__ADAM_REBUILD_PATH_RAILS = function adamRebuildWithStraightCentrelines(...args) {
     const result = original.apply(this, args);
     applyCentrelineFix();
     return result;
@@ -237,8 +274,12 @@ const timer = setInterval(() => {
   if (++attempts > 400) clearInterval(timer);
 }, 25);
 
-window.__ADAM_CENTRAL_PATH_CENTRELINES = {
-  version:2,
+const api = {
+  version:3,
   run:applyCentrelineFix,
   get stats(){ return lastStats; }
 };
+
+window.__ADAM_PATH_STRAIGHT_CENTRELINES = api;
+// Backward-compatible name used by the current production/calibrator wrappers.
+window.__ADAM_CENTRAL_PATH_CENTRELINES = api;
