@@ -21,7 +21,7 @@
       <div class="row quarter-jumps" id="quarterJumps">
         <button data-pct="0">0</button><button data-pct="25">25</button><button data-pct="50">50</button><button data-pct="75">75</button><button data-pct="100">100</button>
       </div>
-      <p class="scroll-hint">Saved baseline mapping: 0/25/50/75/100% correspond to the five approved Preview 5 camera states. Desktop and mobile have independent saved frames.</p>
+      <p class="scroll-hint">Saved baseline mapping: 0/25/50/75/100% correspond to the five approved camera states. Desktop and mobile have independent saved frames.</p>
     </div>
 
     <h2>Keyframe</h2>
@@ -43,7 +43,7 @@
     <div id="material2Ctls">
       <div class="ctl color"><label>Material 2 face colour</label><input id="material2Face" type="color" value="#ebebeb"></div>
       <div class="ctl"><label>Material 2 colour strength<span id="material2TintV" data-v></span></label><input id="material2Tint" type="range" min="0" max="1" step="0.01" value="0.70"></div>
-      <div class="ctl"><label>Material 2 brightness / white lift<span id="material2LiftV" data-v></span></label><input id="material2Lift" type="range" min="0" max="3" step="0.05" value="0.15"></div>
+      <div class="ctl"><label>Material 2 brightness / white lift<span id="material2LiftV" data-v></span></label><input id="material2Lift" type="range" min="0" max="3" step="0.05" value="0.35"></div>
       <div class="ctl"><label>Material 2 opacity<span id="material2OpacityV" data-v></span></label><input id="material2Opacity" type="range" min="0.05" max="1" step="0.01" value="0.94"></div>
       <div class="ctl"><label>Material 2 roughness<span id="material2RoughnessV" data-v></span></label><input id="material2Roughness" type="range" min="0" max="1" step="0.01" value="0.97"></div>
       <div class="ctl"><label>Material 2 metalness<span id="material2MetalnessV" data-v></span></label><input id="material2Metalness" type="range" min="0" max="0.3" step="0.01" value="0"></div>
@@ -55,10 +55,10 @@
     <h2>Shadows</h2>
     <div id="shadowCtls">
       <div class="row tog"><button id="tShadowCalibration" class="on">Shadows</button></div>
-      <div class="ctl"><label>Shadow direction °<span id="shadowAzimuthV" data-v>42°</span></label><input id="shadowAzimuth" type="range" min="-180" max="180" step="1" value="42"></div>
-      <div class="ctl"><label>Shadow light elevation °<span id="shadowElevationV" data-v>58°</span></label><input id="shadowElevation" type="range" min="3" max="88" step="1" value="58"></div>
-      <div class="ctl"><label>Shadow darkness<span id="shadowDarknessV" data-v>0.35</span></label><input id="shadowDarkness" type="range" min="0" max="0.8" step="0.01" value="0.35"></div>
-      <div class="ctl"><label>Shadow softness / spread<span id="shadowSoftnessV" data-v>3.00</span></label><input id="shadowSoftness" type="range" min="0" max="18" step="0.25" value="3"></div>
+      <div class="ctl"><label>Shadow direction °<span id="shadowAzimuthV" data-v>180°</span></label><input id="shadowAzimuth" type="range" min="-180" max="180" step="1" value="180"></div>
+      <div class="ctl"><label>Shadow light elevation °<span id="shadowElevationV" data-v>62°</span></label><input id="shadowElevation" type="range" min="3" max="88" step="1" value="62"></div>
+      <div class="ctl"><label>Shadow darkness<span id="shadowDarknessV" data-v>0.04</span></label><input id="shadowDarkness" type="range" min="0" max="0.8" step="0.01" value="0.04"></div>
+      <div class="ctl"><label>Shadow softness / spread<span id="shadowSoftnessV" data-v>2.00</span></label><input id="shadowSoftness" type="range" min="0" max="18" step="0.25" value="2"></div>
       <div class="ctl"><label>Shadow bias<span id="shadowBiasV" data-v>-0.00035</span></label><input id="shadowBias" type="range" min="-0.005" max="0.005" step="0.00005" value="-0.00035"></div>
       <div class="ctl"><label>Shadow normal bias<span id="shadowNormalBiasV" data-v>0.0200</span></label><input id="shadowNormalBias" type="range" min="0" max="0.15" step="0.0025" value="0.02"></div>
       <button class="btn ghost" id="resetShadowBtn">Reset shadow controls</button>
@@ -82,11 +82,11 @@
     <div class="ctl color"><label>Strip edge colour</label><input id="pathEdgeColor" type="color" value="#242424"></div>
     <div class="ctl"><label>Strip edge opacity<span id="pathEdgeOpacityV" data-v></span></label><input id="pathEdgeOpacity" type="range" min="0" max="1" step="0.01" value="0.14"></div>
     <div class="ctl"><label>Strip edge width (px)<span id="pathEdgeWidthV" data-v></span></label><input id="pathEdgeWidth" type="range" min="0.25" max="5" step="0.05" value="1"></div>
-    <div class="ctl color"><label>Strip glow colour</label><input id="pathGlowColor" type="color" value="#86bf40"></div>
+    <div class="ctl color"><label>Strip glow colour</label><input id="pathGlowColor" type="color" value="#84c534"></div>
     <div class="ctl"><label>Strip inner glow opacity<span id="pathGlowOpacityV" data-v></span></label><input id="pathGlowOpacity" type="range" min="0" max="1" step="0.001" value="0.076"></div>
-    <div class="ctl"><label>Strip inner glow width (px)<span id="pathGlowWidthV" data-v></span></label><input id="pathGlowWidth" type="range" min="0.5" max="12" step="0.05" value="1.96"></div>
+    <div class="ctl"><label>Strip inner glow width (px)<span id="pathGlowWidthV" data-v></span></label><input id="pathGlowWidth" type="range" min="0.5" max="12" step="0.05" value="1.30"></div>
     <div class="ctl"><label>Strip outer halo opacity<span id="pathHaloOpacityV" data-v></span></label><input id="pathHaloOpacity" type="range" min="0" max="1" step="0.001" value="0.03"></div>
-    <div class="ctl"><label>Strip outer halo width (px)<span id="pathHaloWidthV" data-v></span></label><input id="pathHaloWidth" type="range" min="0.5" max="20" step="0.05" value="3.5"></div>
+    <div class="ctl"><label>Strip outer halo width (px)<span id="pathHaloWidthV" data-v></span></label><input id="pathHaloWidth" type="range" min="0.5" max="20" step="0.05" value="1.20"></div>
     <button class="btn ghost" id="copyPathStyleBtn">Copy STRIP_STYLE</button>
 
     <h2>Isometric dots</h2>
@@ -102,8 +102,8 @@
     </div>
 
     <h2>Export</h2>
-    <button class="btn" id="copyBtn">Copy KEYFRAMES + STYLE</button>
-    <button class="btn ghost" id="resetBtn">Reset to saved baseline</button>
+    <button class="btn" id="copyBtn">Copy COMPLETE DESKTOP + MOBILE + STYLES</button>
+    <button class="btn ghost" id="resetBtn">Reset to saved FINAL baseline</button>
     <textarea id="out" readonly></textarea>
 
     <h2>Status</h2><div id="status">booting…</div>
@@ -128,10 +128,10 @@
 <script type="module" src="./calibrate/rim-glow-filter.js?v=edge-only-20260824-1652"></script>
 <script type="module" src="./calibrate/glow-stencil-destack.js?v=renderer-hook-v4-20260824-2327"></script>
 <script type="module" src="./calibrate/sideways-motion-smoothing.js?v=m01-m13-wrapper-v6-20260825-0922"></script>
-<script type="module" src="./calibrate/shadow-controls.js?v=v5-blur8-20260824-2352"></script>
+<script type="module" src="./calibrate/shadow-controls.js?v=final-baseline-v5-20260825-1102"></script>
 <script type="module" src="./calibrate/glow-bootstrap.js?v=no-force-spline-3d-paths-20260822-0230"></script>
 <script type="module" src="./calibrate/keyframe-add-unlock.js?v=20260820-1553"></script>
-<script type="module" src="./calibrate/responsive-keyframes.js?v=preview5-material-fix2-20260824-1518"></script>
+<script type="module" src="./calibrate/responsive-keyframes.js?v=complete-live-export-v1-20260825-1102"></script>
 <script type="module" src="./calibrate/rgb-color-controls.js?v=20260821-0004"></script>
 </body>
 </html>
