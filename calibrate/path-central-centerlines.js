@@ -1,29 +1,28 @@
+import * as THREE from 'three';
 import { LineSegmentsGeometry } from 'three/addons/lines/LineSegmentsGeometry.js';
 
 /*
-  ADAM central corridor centreline fix
-  -----------------------------------
-  The uploaded source GLB has four intended central ribbon meshes:
-    path1, path1_1, path1_2, path1_3
+  ADAM horizontal corridor centreline cleanup
+  -------------------------------------------
+  The source GLB contains thin extruded ribbon meshes. EdgesGeometry exposes
+  several longitudinal shell/bevel edges per ribbon, which makes the main
+  horizontal corridor look like it has far more strips than it really does.
 
-  Each mesh is a thin extruded strip. EdgesGeometry exposes several longitudinal
-  shell/bevel edges for each strip, so the rail renderer can show many more
-  parallel lines than the four intended ribbons. This module replaces only those
-  four entries with a single top-surface centreline per source ribbon.
-
-  All other route geometry is untouched.
+  This pass identifies every long, near-horizontal path ribbon in WORLD plan
+  space and replaces only its generated rail geometry with one top-surface
+  centreline per source ribbon. Vertical/branching route pieces are left alone.
 */
 
-const TARGET_LEAF = /^path1(?:_[123])?$/;
+const HORIZONTAL_RATIO = 4.0;   // world X extent must dominate world Z extent
+const MIN_WORLD_LENGTH = 2.0;   // ignore tiny decorative fragments
 const GROUP_TOLERANCE_REL = 1e-6;
+
+const _box = new THREE.Box3();
+const _size = new THREE.Vector3();
+const _corner = new THREE.Vector3();
 
 let wrapped = false;
 let lastStats = null;
-
-function leaf(path = '') {
-  const parts = String(path).split('/');
-  return parts[parts.length - 1] || '';
-}
 
 function replaceGeometry(line, geometry) {
   if (!line) return;
@@ -32,20 +31,47 @@ function replaceGeometry(line, geometry) {
   previous?.dispose?.();
 }
 
+function worldPlanExtents(source) {
+  source.updateWorldMatrix(true, false);
+  source.geometry.computeBoundingBox();
+  const local = source.geometry.boundingBox;
+  if (!local) return null;
+
+  _box.makeEmpty();
+  for (let ix = 0; ix < 2; ix++) {
+    for (let iy = 0; iy < 2; iy++) {
+      for (let iz = 0; iz < 2; iz++) {
+        _corner.set(
+          ix ? local.max.x : local.min.x,
+          iy ? local.max.y : local.min.y,
+          iz ? local.max.z : local.min.z
+        ).applyMatrix4(source.matrixWorld);
+        _box.expandByPoint(_corner);
+      }
+    }
+  }
+  _box.getSize(_size);
+  return { x:Math.abs(_size.x), z:Math.abs(_size.z) };
+}
+
+function isHorizontalCorridor(entry) {
+  const source = entry?.source;
+  if (!source?.geometry?.attributes?.position) return false;
+  const ext = worldPlanExtents(source);
+  if (!ext) return false;
+  return ext.x >= MIN_WORLD_LENGTH && ext.x >= Math.max(0.001, ext.z) * HORIZONTAL_RATIO;
+}
+
 function localAxisInfo(source) {
   source.updateWorldMatrix(true, false);
   source.geometry.computeBoundingBox();
   const box = source.geometry.boundingBox;
   if (!box) return null;
 
-  const size = box.getSize({
-    x:0, y:0, z:0,
-    subVectors(a, b) { this.x = a.x - b.x; this.y = a.y - b.y; this.z = a.z - b.z; return this; }
-  });
+  const size = box.getSize(new THREE.Vector3());
   const ext = [Math.abs(size.x), Math.abs(size.y), Math.abs(size.z)];
 
-  // Three.js matrix elements are column-major. Find which local axis maps most
-  // strongly to world Y; that is the extrusion/thickness axis.
+  // Find the local axis that maps most strongly to world vertical Y.
   const e = source.matrixWorld.elements;
   const worldYContribution = [Math.abs(e[1]), Math.abs(e[5]), Math.abs(e[9])];
   let verticalAxis = 0;
@@ -136,7 +162,7 @@ function geometryFromSegments(segments) {
 }
 
 function fixEntry(entry) {
-  if (!entry?.source || !TARGET_LEAF.test(leaf(entry.originalPath))) return null;
+  if (!isHorizontalCorridor(entry)) return null;
 
   const before = entry.segmentData?.length || 0;
   const segments = centrelineSegments(entry.source);
@@ -175,12 +201,13 @@ function applyCentrelineFix() {
 
   lastStats = {
     targetRibbons:details.length,
+    changedRibbons:details.filter(item => item.changed).length,
     before:details.reduce((sum, item) => sum + item.before, 0),
     after:details.reduce((sum, item) => sum + item.after, 0),
     details
   };
 
-  console.info('[ADAM central corridor centreline fix]', lastStats);
+  console.info('[ADAM horizontal corridor centreline fix]', lastStats);
   return true;
 }
 
@@ -189,7 +216,7 @@ function wrapRebuild() {
   const original = window.__ADAM_REBUILD_PATH_RAILS;
   if (typeof original !== 'function') return;
 
-  window.__ADAM_REBUILD_PATH_RAILS = function adamRebuildWithCentralCentrelines(...args) {
+  window.__ADAM_REBUILD_PATH_RAILS = function adamRebuildWithHorizontalCentrelines(...args) {
     const result = original.apply(this, args);
     applyCentrelineFix();
     return result;
@@ -211,7 +238,7 @@ const timer = setInterval(() => {
 }, 25);
 
 window.__ADAM_CENTRAL_PATH_CENTRELINES = {
-  version:1,
+  version:2,
   run:applyCentrelineFix,
   get stats(){ return lastStats; }
 };
