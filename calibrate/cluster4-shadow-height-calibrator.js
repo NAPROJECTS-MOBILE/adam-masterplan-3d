@@ -1,12 +1,22 @@
-// ADAM calibrator — M01/M02/M03 vertical placement
-// Raises/lowers only the three confirmed cluster_4_ meshes whose shadows sit
-// too high against their lower edges. Their edge/glow LineSegments2 objects are
-// mesh children, so they remain perfectly aligned when the mesh moves.
+// ADAM calibrator — exact M01–M13 vertical placement
+// Raises/lowers ONLY the 13 user-confirmed cluster_4_ meshes whose shadows sit
+// too high against their lower edges. Their native edge/glow LineSegments2
+// objects are mesh children, so those locked visuals remain aligned.
 
 const TARGET_PATHS = [
   'Scene_1/Main_Group/clusters/cluster_4_/Group_2/Rectangle_3',
   'Scene_1/Main_Group/clusters/cluster_4_/building_1/Boolean_1',
-  'Scene_1/Main_Group/clusters/cluster_4_/building/Boolean'
+  'Scene_1/Main_Group/clusters/cluster_4_/building/Boolean',
+  'Scene_1/Main_Group/clusters/cluster_4_/Group_2/Rectangle_2',
+  'Scene_1/Main_Group/clusters/cluster_4_/Group_2/mesh_6_instance_2',
+  'Scene_1/Main_Group/clusters/cluster_4_/Group_2/mesh_6_instance_3',
+  'Scene_1/Main_Group/clusters/cluster_4_/Group_2/mesh_6_instance_4',
+  'Scene_1/Main_Group/clusters/cluster_4_/Group_2/mesh_6_instance_5',
+  'Scene_1/Main_Group/clusters/cluster_4_/Group_2/mesh_6_instance_6',
+  'Scene_1/Main_Group/clusters/cluster_4_/Group_2/mesh_6_instance_7',
+  'Scene_1/Main_Group/clusters/cluster_4_/Group_2/mesh_6_instance_8',
+  'Scene_1/Main_Group/clusters/cluster_4_/Group_2/mesh_6_instance_9',
+  'Scene_1/Main_Group/clusters/cluster_4_/Group_2/mesh_6_instance_10'
 ];
 
 const DEFAULT_OFFSET = 0.20;
@@ -46,8 +56,12 @@ function resolve(scene) {
     };
   });
 
-  console.info('[ADAM M01-M03 height calibrator]', {
+  updateStatus();
+
+  console.info('[ADAM M01-M13 height calibrator]', {
     offset,
+    found: entries.filter(entry => !!entry.node).length,
+    total: TARGET_PATHS.length,
     targets: entries.map(entry => ({ path:entry.path, found:!!entry.node, baseY:entry.baseY }))
   });
 }
@@ -62,8 +76,9 @@ function ensureControl() {
   const wrap = document.createElement('div');
   wrap.className = 'ctl';
   wrap.innerHTML = `
-    <label>M01–M03 building height<span id="cluster4ShadowHeightV" data-v>+${DEFAULT_OFFSET.toFixed(2)}</span></label>
+    <label>M01–M13 building height<span id="cluster4ShadowHeightV" data-v>+${DEFAULT_OFFSET.toFixed(2)}</span></label>
     <input id="cluster4ShadowHeight" type="range" min="${MIN_OFFSET}" max="${MAX_OFFSET}" step="${STEP}" value="${DEFAULT_OFFSET}">
+    <div id="cluster4ShadowHeightStatus" class="scroll-hint">M01–M13 resolving…</div>
   `;
   root.insertBefore(wrap, receiverCtl || reset);
 }
@@ -71,6 +86,17 @@ function ensureControl() {
 function updateReadout() {
   const readout = $('cluster4ShadowHeightV');
   if (readout) readout.textContent = `${offset >= 0 ? '+' : ''}${offset.toFixed(2)}`;
+}
+
+function updateStatus() {
+  const status = $('cluster4ShadowHeightStatus');
+  if (!status) return;
+  if (!entries) {
+    status.textContent = 'M01–M13 resolving…';
+    return;
+  }
+  const found = entries.filter(entry => !!entry.node).length;
+  status.textContent = `M01–M13 targets found ${found}/${TARGET_PATHS.length}`;
 }
 
 function restoreReceiverBaselineOnce() {
@@ -117,6 +143,7 @@ function bindUI() {
     apply();
   });
   updateReadout();
+  updateStatus();
 }
 
 function beforeRender(renderer, scene) {
@@ -129,8 +156,8 @@ function beforeRender(renderer, scene) {
     return;
   }
 
-  // Keep the calibrated Y position authoritative in case another scene helper
-  // touches transforms later in the frame.
+  // Run immediately before renderer.render so this Y placement remains
+  // authoritative even if another scene helper touched transforms earlier.
   apply();
 }
 
@@ -139,7 +166,7 @@ window.__ADAM_BEFORE_RENDER_HOOKS = window.__ADAM_BEFORE_RENDER_HOOKS || [];
 window.__ADAM_BEFORE_RENDER_HOOKS.push(beforeRender);
 
 window.__ADAM_CLUSTER4_SHADOW_HEIGHT = {
-  version:2,
+  version:3,
   targetPaths:TARGET_PATHS,
   receiverBaseline:RECEIVER_BASELINE,
   get offset(){ return offset; },
@@ -148,5 +175,6 @@ window.__ADAM_CLUSTER4_SHADOW_HEIGHT = {
     if ($('cluster4ShadowHeight')) $('cluster4ShadowHeight').value = offset;
     apply();
   },
-  get entries(){ return entries; }
+  get entries(){ return entries; },
+  get found(){ return entries?.filter(entry => !!entry.node).length || 0; }
 };
