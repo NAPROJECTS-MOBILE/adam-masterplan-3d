@@ -1,17 +1,20 @@
 /*
-  ADAM calibrator — Preview 5 responsive baseline
-  ------------------------------------------------
-  Native calibrator seed for the exact saved Webflow V1.5 Preview 5 timeline.
+  ADAM calibrator — responsive final baseline + complete live export
+  -----------------------------------------------------------------
+  Desktop/mobile framing remains independent. Visual export is now generated
+  directly from the controls that are actually driving the scene, rather than
+  re-reading the old partial STYLE textarea output.
 
-  Source of truth:
-    production/adam-masterplan-v1.5-preview5.js
-
-  IMPORTANT:
-  - Desktop and Mobile each start from their own saved Preview 5 frames.
-  - Mobile is NOT cloned from Desktop on boot.
-  - Materials / lighting are shared globally, as in the production runtime.
-  - Reset restores the exact saved Preview 5 desktop + mobile timelines and
-    the saved Preview 5 scene/material baseline.
+  Export includes:
+  - DESKTOP_KEYFRAMES
+  - MOBILE_KEYFRAMES
+  - STYLE
+  - MATERIAL_2_STYLE
+  - BASE_PLATE_STYLE
+  - SHADOW_STYLE
+  - STRIP_STYLE
+  - STRIP_PULSE_STYLE
+  - FEATURE_STATE
 */
 
 const $ = id => document.getElementById(id);
@@ -33,23 +36,24 @@ const MOBILE_BASELINE = [
   { scrollPct:100, azimuth:29, elevation:37, zoom:0.08, panX:0.48,  panZ:0.31, motionProgress:0.000, ease:'easeInOut' }
 ];
 
+// New saved baseline from the approved calibrator values, 25 Aug 2026.
 const STYLE_BASELINE = {
   background:'#ffffff',
   face:'#ffffff',
   faceTint:0.70,
-  faceLift:0.50,
-  faceOpacity:0.94,
+  faceLift:0.85,
+  faceOpacity:0.95,
   faceRoughness:0.97,
   faceMetalness:0,
   slab:'#ffffff',
   slabOpacity:0.14,
   slabRoughness:1,
   edge:'#242424',
-  edgeOpacity:0.15,
-  edgeWidth:1,
+  edgeOpacity:0.14,
+  edgeWidth:0.65,
   edgeAngle:30,
-  glow:'#b9e222',
-  glowOpacity:0.06,
+  glow:'#82ca2b',
+  glowOpacity:0.24,
   glowWidth:7,
   glowStrength:0.30,
   glowExpansion:0,
@@ -63,7 +67,7 @@ const STYLE_BASELINE = {
   rippleSpeed:-1.25,
   rippleFrequency:0.35,
   rippleWidth:0.30,
-  rippleSoftness:0.08,
+  rippleSoftness:0.081,
   rippleOriginX:0,
   rippleOriginZ:0,
   hemisphere:0.60,
@@ -76,22 +80,50 @@ const STYLE_BASELINE = {
 const MATERIAL_2_BASELINE = {
   face:'#ebebeb',
   faceTint:0.70,
-  faceLift:0.15,
+  faceLift:0.35,
   faceOpacity:0.94,
   faceRoughness:0.97,
   faceMetalness:0
+};
+
+const BASE_PLATE_BASELINE = {
+  scale:1.00
+};
+
+const SHADOW_BASELINE = {
+  enabled:true,
+  azimuth:180,
+  elevation:62,
+  darkness:0.04,
+  softness:2.00,
+  bias:-0.00035,
+  normalBias:0.0200,
+  receiverOffset:0.025,
+  mapSize:4096,
+  blurSamples:8,
+  filter:'VSM'
 };
 
 const STRIP_BASELINE = {
   edgeAngle:10,
   edgeColor:'#242424',
   edgeOpacity:0.14,
-  edgeWidth:1,
-  glowColor:'#86bf40',
+  edgeWidth:1.00,
+  glowColor:'#84c534',
   glowOpacity:0.076,
-  glowWidth:1.96,
+  glowWidth:1.30,
   haloOpacity:0.030,
-  haloWidth:3.50
+  haloWidth:1.20,
+  edgesVisible:true,
+  glowVisible:true
+};
+
+const STRIP_PULSE_BASELINE = {
+  enabled:true,
+  pulseSpeed:11.95,
+  pulseWidth:0.80,
+  pulseStrength:0.530,
+  pulseStagger:0.12
 };
 
 let mode = 'desktop';
@@ -203,23 +235,38 @@ function loadFrames(frames) {
   suppress = false;
 }
 
-function setGroup(selector, values) {
+function directGroupInputs(selector) {
   const host = document.querySelector(selector);
-  if (!host) return;
-
-  // Only use app-v2's direct control input from each generated .ctl wrapper.
-  // RGB helpers append three nested number inputs to colour wrappers; including
-  // those here shifts every following material/light value into the wrong field.
-  const inputs = [...host.children]
+  if (!host) return [];
+  return [...host.children]
     .map(wrap => wrap.querySelector(':scope > input'))
     .filter(Boolean);
+}
 
+function setGroup(selector, values) {
+  const inputs = directGroupInputs(selector);
   values.forEach((value, index) => setInput(inputs[index], value, 'input'));
 }
 
-function ensureToggleOn(id) {
+function groupValues(selector) {
+  return directGroupInputs(selector).map(input =>
+    input.type === 'color' ? input.value : Number(input.value)
+  );
+}
+
+function setToggle(id, enabled) {
   const button = $(id);
-  if (button && !button.classList.contains('on')) button.click();
+  if (!button) return;
+  const on = button.classList.contains('on');
+  if (on !== !!enabled) button.click();
+}
+
+function baseScaleInput() {
+  const host = $('slabCtls');
+  if (!host) return null;
+  const wrappers = [...host.children];
+  const explicit = wrappers.find(wrap => wrap._key === 'baseScale');
+  return explicit?.querySelector(':scope > input') || directGroupInputs('#slabCtls')[3] || null;
 }
 
 function applySavedStyle() {
@@ -244,8 +291,14 @@ function applySavedStyle() {
   setGroup('#slabCtls', [
     STYLE_BASELINE.slab,
     STYLE_BASELINE.slabOpacity,
-    STYLE_BASELINE.slabRoughness
+    STYLE_BASELINE.slabRoughness,
+    BASE_PLATE_BASELINE.scale
   ]);
+  setInput(baseScaleInput(), BASE_PLATE_BASELINE.scale);
+  if (window.__ADAM_BASE_PLATE_SIZE_STATE) {
+    window.__ADAM_BASE_PLATE_SIZE_STATE.baseScale = BASE_PLATE_BASELINE.scale;
+    window.__ADAM_BASE_PLATE_SIZE_APPLY?.(BASE_PLATE_BASELINE.scale);
+  }
 
   setGroup('#edgeCtls', [
     STYLE_BASELINE.edge,
@@ -285,6 +338,15 @@ function applySavedStyle() {
   setInput($('material2Roughness'), MATERIAL_2_BASELINE.faceRoughness);
   setInput($('material2Metalness'), MATERIAL_2_BASELINE.faceMetalness);
 
+  setInput($('shadowAzimuth'), SHADOW_BASELINE.azimuth);
+  setInput($('shadowElevation'), SHADOW_BASELINE.elevation);
+  setInput($('shadowDarkness'), SHADOW_BASELINE.darkness);
+  setInput($('shadowSoftness'), SHADOW_BASELINE.softness);
+  setInput($('shadowBias'), SHADOW_BASELINE.bias);
+  setInput($('shadowNormalBias'), SHADOW_BASELINE.normalBias);
+  setInput($('shadowReceiverOffset'), SHADOW_BASELINE.receiverOffset);
+  setToggle('tShadowCalibration', SHADOW_BASELINE.enabled);
+
   setInput($('pathEdgeAngle'), STRIP_BASELINE.edgeAngle);
   setInput($('pathEdgeColor'), STRIP_BASELINE.edgeColor);
   setInput($('pathEdgeOpacity'), STRIP_BASELINE.edgeOpacity);
@@ -294,8 +356,14 @@ function applySavedStyle() {
   setInput($('pathGlowWidth'), STRIP_BASELINE.glowWidth);
   setInput($('pathHaloOpacity'), STRIP_BASELINE.haloOpacity);
   setInput($('pathHaloWidth'), STRIP_BASELINE.haloWidth);
-  ensureToggleOn('tPathEdges');
-  ensureToggleOn('tPathGlow');
+  setToggle('tPathEdges', STRIP_BASELINE.edgesVisible);
+  setToggle('tPathGlow', STRIP_BASELINE.glowVisible);
+
+  setInput($('pathPulseSpeed'), STRIP_PULSE_BASELINE.pulseSpeed);
+  setInput($('pathPulseWidth'), STRIP_PULSE_BASELINE.pulseWidth);
+  setInput($('pathPulseStrength'), STRIP_PULSE_BASELINE.pulseStrength);
+  setInput($('pathPulseStagger'), STRIP_PULSE_BASELINE.pulseStagger);
+  setToggle('tPathPulse', STRIP_PULSE_BASELINE.enabled);
 }
 
 function serialiseFrames(constName, frames) {
@@ -308,18 +376,160 @@ function serialiseFrames(constName, frames) {
   return `const ${constName} = [\n${body}\n];`;
 }
 
-function currentStyleBlock() {
-  const value = $('out')?.value || '';
-  const marker = 'const STYLE = ';
-  const index = value.indexOf(marker);
-  if (index >= 0) return value.slice(index).trim();
-  return `const STYLE = ${JSON.stringify(STYLE_BASELINE, null, 2)};`;
+function valueOr(input, fallback) {
+  if (!input) return fallback;
+  return input.type === 'color' ? input.value : Number(input.value);
+}
+
+function readLiveStyle() {
+  const light = groupValues('#lightCtls');
+  const face = groupValues('#faceCtls');
+  const slab = groupValues('#slabCtls');
+  const edge = groupValues('#edgeCtls');
+  const glow = groupValues('#glowCtls');
+  const dots = groupValues('#dotCtls');
+
+  return {
+    background:light[0] ?? STYLE_BASELINE.background,
+    face:face[0] ?? STYLE_BASELINE.face,
+    faceTint:face[1] ?? STYLE_BASELINE.faceTint,
+    faceLift:face[2] ?? STYLE_BASELINE.faceLift,
+    faceOpacity:face[3] ?? STYLE_BASELINE.faceOpacity,
+    faceRoughness:face[4] ?? STYLE_BASELINE.faceRoughness,
+    faceMetalness:face[5] ?? STYLE_BASELINE.faceMetalness,
+    slab:slab[0] ?? STYLE_BASELINE.slab,
+    slabOpacity:slab[1] ?? STYLE_BASELINE.slabOpacity,
+    slabRoughness:slab[2] ?? STYLE_BASELINE.slabRoughness,
+    edge:edge[0] ?? STYLE_BASELINE.edge,
+    edgeOpacity:edge[1] ?? STYLE_BASELINE.edgeOpacity,
+    edgeWidth:edge[2] ?? STYLE_BASELINE.edgeWidth,
+    edgeAngle:edge[3] ?? STYLE_BASELINE.edgeAngle,
+    glow:glow[0] ?? STYLE_BASELINE.glow,
+    glowOpacity:glow[1] ?? STYLE_BASELINE.glowOpacity,
+    glowWidth:glow[2] ?? STYLE_BASELINE.glowWidth,
+    glowStrength:glow[3] ?? STYLE_BASELINE.glowStrength,
+    glowExpansion:glow[4] ?? STYLE_BASELINE.glowExpansion,
+    dotColor:dots[0] ?? STYLE_BASELINE.dotColor,
+    dotDensity:dots[1] ?? STYLE_BASELINE.dotDensity,
+    dotSize:dots[2] ?? STYLE_BASELINE.dotSize,
+    dotEdgeSoftness:dots[3] ?? STYLE_BASELINE.dotEdgeSoftness,
+    dotSkew:dots[4] ?? STYLE_BASELINE.dotSkew,
+    dotFadedOpacity:dots[5] ?? STYLE_BASELINE.dotFadedOpacity,
+    dotActiveOpacity:dots[6] ?? STYLE_BASELINE.dotActiveOpacity,
+    rippleSpeed:dots[7] ?? STYLE_BASELINE.rippleSpeed,
+    rippleFrequency:dots[8] ?? STYLE_BASELINE.rippleFrequency,
+    rippleWidth:dots[9] ?? STYLE_BASELINE.rippleWidth,
+    rippleSoftness:dots[10] ?? STYLE_BASELINE.rippleSoftness,
+    rippleOriginX:dots[11] ?? STYLE_BASELINE.rippleOriginX,
+    rippleOriginZ:dots[12] ?? STYLE_BASELINE.rippleOriginZ,
+    hemisphere:light[1] ?? STYLE_BASELINE.hemisphere,
+    key:light[2] ?? STYLE_BASELINE.key,
+    rim:light[3] ?? STYLE_BASELINE.rim,
+    exposure:light[4] ?? STYLE_BASELINE.exposure,
+    keyTint:light[5] ?? STYLE_BASELINE.keyTint
+  };
+}
+
+function readMaterial2Style() {
+  return {
+    face:valueOr($('material2Face'), MATERIAL_2_BASELINE.face),
+    faceTint:valueOr($('material2Tint'), MATERIAL_2_BASELINE.faceTint),
+    faceLift:valueOr($('material2Lift'), MATERIAL_2_BASELINE.faceLift),
+    faceOpacity:valueOr($('material2Opacity'), MATERIAL_2_BASELINE.faceOpacity),
+    faceRoughness:valueOr($('material2Roughness'), MATERIAL_2_BASELINE.faceRoughness),
+    faceMetalness:valueOr($('material2Metalness'), MATERIAL_2_BASELINE.faceMetalness)
+  };
+}
+
+function readBasePlateStyle() {
+  const live = Number(window.__ADAM_BASE_PLATE_SIZE_STATE?.baseScale);
+  return {
+    scale:Number.isFinite(live) ? live : valueOr(baseScaleInput(), BASE_PLATE_BASELINE.scale)
+  };
+}
+
+function readShadowStyle() {
+  const live = window.__ADAM_SHADOW_CALIBRATOR?.state || {};
+  return {
+    enabled:$('tShadowCalibration')?.classList.contains('on') ?? SHADOW_BASELINE.enabled,
+    azimuth:valueOr($('shadowAzimuth'), live.azimuth ?? SHADOW_BASELINE.azimuth),
+    elevation:valueOr($('shadowElevation'), live.elevation ?? SHADOW_BASELINE.elevation),
+    darkness:valueOr($('shadowDarkness'), live.darkness ?? SHADOW_BASELINE.darkness),
+    softness:valueOr($('shadowSoftness'), live.softness ?? SHADOW_BASELINE.softness),
+    bias:valueOr($('shadowBias'), live.bias ?? SHADOW_BASELINE.bias),
+    normalBias:valueOr($('shadowNormalBias'), live.normalBias ?? SHADOW_BASELINE.normalBias),
+    receiverOffset:valueOr($('shadowReceiverOffset'), live.receiverOffset ?? SHADOW_BASELINE.receiverOffset),
+    mapSize:Number(live.mapSize ?? SHADOW_BASELINE.mapSize),
+    blurSamples:SHADOW_BASELINE.blurSamples,
+    filter:'VSM'
+  };
+}
+
+function readStripStyle() {
+  const live = window.__ADAM_PATH_RIBBON_STYLE || {};
+  return {
+    edgeAngle:valueOr($('pathEdgeAngle'), STRIP_BASELINE.edgeAngle),
+    edgeColor:valueOr($('pathEdgeColor'), live.edgeColor ?? STRIP_BASELINE.edgeColor),
+    edgeOpacity:valueOr($('pathEdgeOpacity'), live.edgeOpacity ?? STRIP_BASELINE.edgeOpacity),
+    edgeWidth:valueOr($('pathEdgeWidth'), live.edgeWidth ?? STRIP_BASELINE.edgeWidth),
+    glowColor:valueOr($('pathGlowColor'), live.glowColor ?? STRIP_BASELINE.glowColor),
+    glowOpacity:valueOr($('pathGlowOpacity'), live.glowOpacity ?? STRIP_BASELINE.glowOpacity),
+    glowWidth:valueOr($('pathGlowWidth'), live.glowWidth ?? STRIP_BASELINE.glowWidth),
+    haloOpacity:valueOr($('pathHaloOpacity'), live.haloOpacity ?? STRIP_BASELINE.haloOpacity),
+    haloWidth:valueOr($('pathHaloWidth'), live.haloWidth ?? STRIP_BASELINE.haloWidth),
+    edgesVisible:$('tPathEdges')?.classList.contains('on') ?? true,
+    glowVisible:$('tPathGlow')?.classList.contains('on') ?? true
+  };
+}
+
+function readStripPulseStyle() {
+  const live = window.__ADAM_PATH_RIBBON_STYLE || {};
+  return {
+    enabled:$('tPathPulse')?.classList.contains('on') ?? STRIP_PULSE_BASELINE.enabled,
+    pulseSpeed:valueOr($('pathPulseSpeed'), live.pulseSpeed ?? STRIP_PULSE_BASELINE.pulseSpeed),
+    pulseWidth:valueOr($('pathPulseWidth'), live.pulseWidth ?? STRIP_PULSE_BASELINE.pulseWidth),
+    pulseStrength:valueOr($('pathPulseStrength'), live.pulseStrength ?? STRIP_PULSE_BASELINE.pulseStrength),
+    pulseStagger:valueOr($('pathPulseStagger'), live.pulseStagger ?? STRIP_PULSE_BASELINE.pulseStagger)
+  };
+}
+
+function readFeatureState() {
+  return {
+    shadows:$('tShadowCalibration')?.classList.contains('on') ?? true,
+    edges:$('tEdges')?.classList.contains('on') ?? true,
+    glow:$('tGlow')?.classList.contains('on') ?? true,
+    dots:$('tDots')?.classList.contains('on') ?? true,
+    animateDots:$('tAnimate')?.classList.contains('on') ?? true,
+    stripEdges:$('tPathEdges')?.classList.contains('on') ?? true,
+    stripGlow:$('tPathGlow')?.classList.contains('on') ?? true,
+    stripPulse:$('tPathPulse')?.classList.contains('on') ?? true,
+    architecturalGlowStencil:true
+  };
+}
+
+function serialiseObject(name, value) {
+  return `const ${name} = ${JSON.stringify(value, null, 2)};`;
 }
 
 function serialiseResponsive() {
-  return `${serialiseFrames('DESKTOP_KEYFRAMES', modes.desktop)}\n\n` +
-    `${serialiseFrames('MOBILE_KEYFRAMES', modes.mobile)}\n\n` +
-    `// Shared across desktop + mobile.\n${currentStyleBlock()}`;
+  return [
+    serialiseFrames('DESKTOP_KEYFRAMES', modes.desktop),
+    serialiseFrames('MOBILE_KEYFRAMES', modes.mobile),
+    '// Shared global scene styling.',
+    serialiseObject('STYLE', readLiveStyle()),
+    '// Secondary material styling.',
+    serialiseObject('MATERIAL_2_STYLE', readMaterial2Style()),
+    '// Base plate footprint.',
+    serialiseObject('BASE_PLATE_STYLE', readBasePlateStyle()),
+    '// Shadow renderer styling.',
+    serialiseObject('SHADOW_STYLE', readShadowStyle()),
+    '// Static strip edge/glow styling.',
+    serialiseObject('STRIP_STYLE', readStripStyle()),
+    '// Independent whole-strip electric pulse.',
+    serialiseObject('STRIP_PULSE_STYLE', readStripPulseStyle()),
+    '// Visual feature toggles.',
+    serialiseObject('FEATURE_STATE', readFeatureState())
+  ].join('\n\n');
 }
 
 function updateExportPreview() {
@@ -344,8 +554,8 @@ function updateModeUI() {
   const badge = $('responsiveModeStatus');
   if (badge) {
     badge.textContent = mode === 'mobile'
-      ? `Editing MOBILE · ${modes.mobile.length} saved Preview 5 frames`
-      : `Editing DESKTOP · ${modes.desktop.length} saved Preview 5 frames`;
+      ? `Editing MOBILE · ${modes.mobile.length} saved frames`
+      : `Editing DESKTOP · ${modes.desktop.length} saved frames`;
   }
 }
 
@@ -393,7 +603,7 @@ function addResponsiveUI() {
     </div>
     <button class="btn ghost responsive-sync-btn" id="responsiveSyncBtn">Copy desktop → mobile</button>
     <div class="responsive-mode-status" id="responsiveModeStatus"></div>
-    <p class="responsive-hint">Both modes start from the exact saved Preview 5 frames. They are independent unless you explicitly copy Desktop → Mobile.</p>
+    <p class="responsive-hint">Desktop and Mobile framing are independent. The main export below always contains both framing sets plus every live visual styling block.</p>
   `;
 
   keyframeHeading.before(heading, box);
@@ -422,7 +632,7 @@ async function restoreSavedBaseline() {
   updateExportPreview();
 
   const status = $('status');
-  if (status) status.textContent += '\nPreview 5 saved baseline restored · 5 desktop + 5 mobile frames';
+  if (status) status.textContent += '\nFinal saved baseline restored · complete styling export refreshed';
 }
 
 async function install() {
@@ -431,15 +641,15 @@ async function install() {
     !document.querySelector('#camCtls input') ||
     !document.querySelector('#lightCtls input') ||
     !$('material2Face') ||
-    !$('pathEdgeAngle')
+    !$('pathEdgeAngle') ||
+    !$('pathPulseSpeed') ||
+    !$('shadowReceiverOffset')
   ) {
     await waitFrame();
   }
 
   addResponsiveUI();
 
-  // Critical difference from the old helper: load the saved Preview 5 desktop
-  // timeline directly instead of snapshotting app-v2's generic START_POSE seed.
   suppress = true;
   applySavedStyle();
   loadFrames(DESKTOP_BASELINE);
@@ -461,16 +671,31 @@ async function install() {
     $(id)?.addEventListener('click', () => setTimeout(refreshModeSnapshot, 0));
   }
 
+  // Any visual control movement immediately refreshes the export textarea.
+  const panel = $('panel');
+  panel?.addEventListener('input', () => {
+    if (!suppress) setTimeout(updateExportPreview, 0);
+  });
+  panel?.addEventListener('change', () => {
+    if (!suppress) setTimeout(updateExportPreview, 0);
+  });
+  panel?.addEventListener('click', event => {
+    const id = event.target?.id || '';
+    if (/^t(?:ShadowCalibration|PathEdges|PathGlow|PathPulse|Edges|Glow|Dots|Animate)$/.test(id)) {
+      setTimeout(updateExportPreview, 0);
+    }
+  });
+
   const copy = $('copyBtn');
   if (copy) {
-    copy.textContent = 'Copy DESKTOP + MOBILE + STYLE';
+    copy.textContent = 'Copy COMPLETE DESKTOP + MOBILE + STYLES';
     copy.onclick = async () => {
       modes[mode] = snapshotCurrentMode();
       const text = serialiseResponsive();
       $('out').value = text;
       try {
         await navigator.clipboard.writeText(text);
-        $('status').textContent += '\nresponsive export copied · desktop + mobile';
+        $('status').textContent += '\ncomplete export copied · frames + global + M2 + base + shadows + strips + pulse';
       } catch {
         $('out').select();
       }
@@ -479,7 +704,7 @@ async function install() {
 
   const reset = $('resetBtn');
   if (reset) {
-    reset.textContent = 'Reset to saved Preview 5 baseline';
+    reset.textContent = 'Reset to saved FINAL baseline';
     reset.onclick = restoreSavedBaseline;
   }
 
@@ -488,7 +713,11 @@ async function install() {
     mobile:cloneFrames(MOBILE_BASELINE),
     style:{ ...STYLE_BASELINE },
     material2:{ ...MATERIAL_2_BASELINE },
+    basePlate:{ ...BASE_PLATE_BASELINE },
+    shadows:{ ...SHADOW_BASELINE },
     strip:{ ...STRIP_BASELINE },
+    stripPulse:{ ...STRIP_PULSE_BASELINE },
+    export:serialiseResponsive,
     reset:restoreSavedBaseline
   };
 
