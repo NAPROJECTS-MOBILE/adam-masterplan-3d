@@ -14,8 +14,8 @@
 
 const KEEP = 0.95;
 const CATCH_UP = 1 - KEEP;
-const LEAD_FRAMES = KEEP / CATCH_UP; // 19 frames: cancels steady-state EMA lag
-const MAX_LEAD = 0.04;                // max +/-4% of section progress
+const LEAD_FRAMES = KEEP / CATCH_UP;
+const MAX_LEAD = 0.04;
 const nativeRAF = window.requestAnimationFrame.bind(window);
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 
@@ -42,7 +42,6 @@ function predictedEntryProgress(rect) {
 
   const velocityPerFrame = raw - previousRawProgress;
   previousRawProgress = raw;
-
   currentLead = clamp(velocityPerFrame * LEAD_FRAMES, -MAX_LEAD, MAX_LEAD);
   currentPredictedTarget = clamp(raw + currentLead, 0, 1);
   return currentPredictedTarget;
@@ -79,7 +78,7 @@ function syntheticRect(realRect) {
 }
 
 function install(api) {
-  if (installed || !api?.track || !api?.performance) return false;
+  if (installed || window.__ADAM_SCROLL_SMOOTHER_INSTALLED || !api?.track || !api?.performance) return false;
 
   const track = api.track;
   const realGetRect = track.getBoundingClientRect.bind(track);
@@ -141,18 +140,21 @@ function install(api) {
   }
 
   installed = true;
-  console.info('[ADAM scroll smoothing] active with velocity lead', {
+  window.__ADAM_SCROLL_SMOOTHER_INSTALLED = {
+    version:2,
     keep:KEEP,
     catchUp:CATCH_UP,
     leadFrames:LEAD_FRAMES,
     maxLeadPct:MAX_LEAD * 100
-  });
+  };
+
+  console.info('[ADAM scroll smoothing] active with velocity lead', window.__ADAM_SCROLL_SMOOTHER_INSTALLED);
   return true;
 }
 
 if (!install(window.__adamMasterplanV15Preview)) {
   const timer = setInterval(() => {
-    if (install(window.__adamMasterplanV15Preview)) clearInterval(timer);
+    if (window.__ADAM_SCROLL_SMOOTHER_INSTALLED || install(window.__adamMasterplanV15Preview)) clearInterval(timer);
   }, 25);
   setTimeout(() => clearInterval(timer), 20000);
 }
