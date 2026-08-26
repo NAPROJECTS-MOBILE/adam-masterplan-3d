@@ -8,3 +8,4 @@
 
 await import('./scroll-smoothing-95.js?v=velocity-lead-v2-20260826-1114');
 await import('./adam-masterplan-webflow-final-final.js?v=velocity-lead-wrapper-20260826-1114');
+await import('./material2-rectangle14-lock.js?v=rectangle14-m2-lock-v1-20260826-1325');
