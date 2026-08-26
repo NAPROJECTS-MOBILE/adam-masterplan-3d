@@ -4,14 +4,14 @@ import * as THREE from 'three';
   ADAM MASTERPLAN — WEBFLOW FINAL FINAL
   ------------------------------------
   Current authoritative website baseline, 26 Aug 2026.
-  - 70% 3D scroll smoothing
+  - 95% 3D scroll smoothing
   - final strip source/edge/glow/halo styling
   - independent whole-strip pulse parity
   - route centreline + shell-collapse cleanup
 */
 
 await import('./adam-masterplan-webflow-final.js?v=complete-export-v1-20260825-1117');
-await import('./scroll-smoothing-70.js?v=smooth70-v1-20260826-0930');
+await import('./scroll-smoothing-95.js?v=smooth95-v1-20260826-1050');
 await import('../calibrate/path-central-centerlines.js?v=straight-centrelines-v3-20260825-1653');
 await import('../calibrate/path-ribbon-shell-collapse.js?v=shell-collapse-v1-20260825-2332');
 
@@ -290,14 +290,14 @@ function installFinalState(api) {
     }
   }
 
-  api.version = 'webflow-final-final-smooth70-strip-glow-lock-20260826-0930';
+  api.version = 'webflow-final-final-smooth95-strip-glow-lock-20260826-1050';
   api.finalFinal = {
     mobileKeyframes:FINAL_MOBILE_KEYFRAMES,
     globalGlow:FINAL_GLOBAL_GLOW,
     stripStyle:FINAL_STRIP_STYLE,
     stripPulseStyle:FINAL_STRIP_PULSE_STYLE,
     rippleDirectionSwitchPct:RIPPLE_DIRECTION_SWITCH_PCT,
-    scrollSmoothing:0.70,
+    scrollSmoothing:0.95,
     straightRibbonCentrelines:true,
     ribbonShellCollapse:true,
     get independentPulseReady(){ return pulseReady; }
@@ -307,7 +307,7 @@ function installFinalState(api) {
   if (root) root.dataset.adamVersion = api.version;
 
   installed = true;
-  console.info('[ADAM Webflow FINAL FINAL — smooth70 + strip glow lock] applied', api.finalFinal);
+  console.info('[ADAM Webflow FINAL FINAL — smooth95 + strip glow lock] applied', api.finalFinal);
   return true;
 }
 
