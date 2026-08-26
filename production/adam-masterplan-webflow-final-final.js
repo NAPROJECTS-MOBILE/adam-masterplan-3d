@@ -3,9 +3,15 @@ import * as THREE from 'three';
 /*
   ADAM MASTERPLAN — WEBFLOW FINAL FINAL
   ------------------------------------
-  Current authoritative website baseline, 25 Aug 2026.
+  Current authoritative website baseline, 26 Aug 2026.
   Keeps the accepted renderer/shadow/glow machinery and the route-geometry
   cleanup, then applies the latest exported calibrator values.
+
+  V2 pulse sync:
+  The independent whole-strip pulse is explicitly re-locked and retriggered
+  after the route cleanup has rebuilt the line geometry. This removes a Webflow
+  initialization race where the right pulse numbers existed but the independent
+  pulse overlays could still reference the pre-cleanup strip layers.
 */
 
 await import('./adam-masterplan-webflow-final.js?v=complete-export-v1-20260825-1117');
@@ -56,6 +62,7 @@ const RIPPLE_DIRECTION_SWITCH_PCT = 63.6;
 
 let installed = false;
 let rippleUniforms = [];
+let pulseReady = false;
 
 function pathOf(object) {
   const parts = [];
@@ -92,8 +99,6 @@ function applySourceOpacity() {
     const mesh = entry?.mesh;
     if (!mesh?.isMesh || !mesh.material) continue;
 
-    // Own these materials before changing opacity in case the GLB reuses a
-    // material elsewhere in the scene.
     if (!mesh.userData?.adamWebsiteSourceOpacityOwned) {
       const clone = material => {
         if (!material) return material;
@@ -122,6 +127,62 @@ function applySourceOpacity() {
       material.needsUpdate = true;
     });
   }
+}
+
+function syncIndependentPulseState() {
+  const strip = window.__ADAM_PATH_RIBBON_STYLE;
+  if (!strip) return false;
+
+  Object.assign(strip, {
+    pulseEnabled:FINAL_STRIP_PULSE_STYLE.enabled,
+    pulseSpeed:FINAL_STRIP_PULSE_STYLE.pulseSpeed,
+    pulseWidth:FINAL_STRIP_PULSE_STYLE.pulseWidth,
+    pulseStrength:FINAL_STRIP_PULSE_STYLE.pulseStrength,
+    pulseStagger:FINAL_STRIP_PULSE_STYLE.pulseStagger,
+    __adamFlowV3DefaultsApplied:true,
+    __adamIndependentPulseDefaultsApplied:true
+  });
+
+  // The travelling pulse geometry is legacy. Keep it hidden so the only active
+  // animated strip light is the accepted independent whole-strip pulse rhythm.
+  const entries = window.__ADAM_PATH_PULSE?.entries;
+  if (Array.isArray(entries)) {
+    for (const entry of entries) {
+      if (entry?.pulseSoft) entry.pulseSoft.visible = false;
+      if (entry?.pulseCore) entry.pulseCore.visible = false;
+    }
+  }
+
+  return true;
+}
+
+function armIndependentPulseWhenReady() {
+  let attempts = 0;
+  const timer = setInterval(() => {
+    attempts++;
+    syncIndependentPulseState();
+
+    const rhythm = window.__ADAM_PATH_PULSE_RHYTHM;
+    const overlayCount = Number(rhythm?.overlays?.size || 0);
+    if (overlayCount > 0) {
+      rhythm.retrigger?.();
+      pulseReady = true;
+      clearInterval(timer);
+      console.info('[ADAM Webflow independent pulse] armed after cleanup', {
+        overlays:overlayCount,
+        pulseSpeed:FINAL_STRIP_PULSE_STYLE.pulseSpeed,
+        pulseWidth:FINAL_STRIP_PULSE_STYLE.pulseWidth,
+        pulseStrength:FINAL_STRIP_PULSE_STYLE.pulseStrength,
+        pulseStagger:FINAL_STRIP_PULSE_STYLE.pulseStagger
+      });
+      return;
+    }
+
+    if (attempts >= 240) {
+      clearInterval(timer);
+      console.warn('[ADAM Webflow independent pulse] overlays did not become ready in time');
+    }
+  }, 25);
 }
 
 function findRippleUniforms(scene) {
@@ -159,30 +220,27 @@ function installFinalState(api) {
     haloWidth:FINAL_STRIP_STYLE.haloWidth,
     sourceOpacity:FINAL_STRIP_STYLE.sourceOpacity,
     edgesVisible:FINAL_STRIP_STYLE.edgesVisible,
-    glowVisible:FINAL_STRIP_STYLE.glowVisible,
-    pulseEnabled:FINAL_STRIP_PULSE_STYLE.enabled,
-    pulseSpeed:FINAL_STRIP_PULSE_STYLE.pulseSpeed,
-    pulseWidth:FINAL_STRIP_PULSE_STYLE.pulseWidth,
-    pulseStrength:FINAL_STRIP_PULSE_STYLE.pulseStrength,
-    pulseStagger:FINAL_STRIP_PULSE_STYLE.pulseStagger,
-    __adamFlowV3DefaultsApplied:true,
-    __adamIndependentPulseDefaultsApplied:true
+    glowVisible:FINAL_STRIP_STYLE.glowVisible
   });
+  syncIndependentPulseState();
 
   // Build once from the source geometry, then apply both cleanup passes.
   window.__ADAM_REBUILD_PATH_RAILS?.();
   window.__ADAM_PATH_STRAIGHT_CENTRELINES?.run?.();
   window.__ADAM_PATH_RIBBON_SHELL_COLLAPSE?.run?.();
 
+  // Important: arm the independent pulse only after the cleanup has replaced
+  // the rail geometry. This is the production/calibrator parity fix.
+  armIndependentPulseWhenReady();
+
   applySourceOpacity();
   applyArchitecturalGlow(api);
   findRippleUniforms(api.scene);
 
   const finalStyleHook = () => {
-    // Reassert only the values that other runtime modules can legitimately
-    // touch after initialization.
     applyArchitecturalGlow(api);
     applySourceOpacity();
+    syncIndependentPulseState();
 
     if (!rippleUniforms.length) findRippleUniforms(api.scene);
     const late = currentScrollPct(api) >= RIPPLE_DIRECTION_SWITCH_PCT;
@@ -194,7 +252,6 @@ function installFinalState(api) {
   window.__ADAM_BEFORE_RENDER_HOOKS.push(finalStyleHook);
   finalStyleHook();
 
-  // Keep exposed/exported runtime state truthful for debugging and handoff.
   if (api.style) {
     api.style.glowWidth = FINAL_GLOBAL_GLOW.width;
     api.style.glowStrength = FINAL_GLOBAL_GLOW.strength;
@@ -209,7 +266,7 @@ function installFinalState(api) {
     }
   }
 
-  api.version = 'webflow-final-final-latest-baseline-20260825-2348';
+  api.version = 'webflow-final-final-pulse-parity-20260826-0024';
   api.finalFinal = {
     mobileKeyframes:FINAL_MOBILE_KEYFRAMES,
     globalGlow:FINAL_GLOBAL_GLOW,
@@ -218,14 +275,15 @@ function installFinalState(api) {
     rippleDirectionSwitchPct:RIPPLE_DIRECTION_SWITCH_PCT,
     scrollSmoothing:0.90,
     straightRibbonCentrelines:true,
-    ribbonShellCollapse:true
+    ribbonShellCollapse:true,
+    get independentPulseReady(){ return pulseReady; }
   };
 
   const root = document.querySelector('[data-adam-masterplan-v15-preview]');
   if (root) root.dataset.adamVersion = api.version;
 
   installed = true;
-  console.info('[ADAM Webflow FINAL FINAL — latest baseline] applied', api.finalFinal);
+  console.info('[ADAM Webflow FINAL FINAL — pulse parity] applied', api.finalFinal);
   return true;
 }
 
