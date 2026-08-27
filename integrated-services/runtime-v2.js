@@ -30,9 +30,6 @@ const MODEL_CHUNKS_AFTER_04 = [
   './model-v4-07.b64?v=services-model-final-v4'
 ];
 
-// Older export that was written as a normal complete sequential set rather than
-// the later 15,254-char windows. Keep it as a deterministic fallback so the
-// calibrator can still boot if the damaged v4 slot cannot be recovered.
 const MODEL_V2_CHUNKS = [
   './model-v2-00.b64?v=services-model-v2-fallback-v1',
   './model-v2-01.b64?v=services-model-v2-fallback-v1',
@@ -205,7 +202,7 @@ async function assembledModelText() {
 window.fetch = async function servicesModelFetch(input, init) {
   const requestUrl = typeof input === 'string' ? input : input?.url || String(input);
   const absolute = new URL(requestUrl, location.href);
-  if (absolute.pathname.endsWith('/integrated-services/model.glb.zst.b64')) {
+  if (absolute.pathname.endsWith('/model.glb.zst.b64')) {
     const text = await assembledModelText();
     return new Response(text, {
       status:200,
@@ -253,7 +250,7 @@ try {
   await assembledModelText();
   const animationModule = await import('./animation-data.js');
   alignTimelineToGlb(animationModule.SPLINE_TIMELINE);
-  await import('./runtime.js?v=services-runtime-core-v2-20260827');
+  await import('./runtime.js?v=services-runtime-core-v3-20260827');
   const overlay = document.getElementById('bootstrapStatusOverlay');
   if (overlay) overlay.remove();
 } catch (error) {
