@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ADAM Integrated Services — calibration v11</title>
+<link rel="stylesheet" href="./calibrate/style.css?v=services-calibrator-v11-20260827-1325">
+<style>
+  #frame{background:#f2f3f0}
+  .services3d{position:absolute;inset:0;background:#f2f3f0}
+  .services3d canvas{display:block;width:100%;height:100%}
+  .mode-row{margin-bottom:8px}
+  .mode-row button.on{background:#fff;color:#111;border-color:#fff}
+  .services-note{font-size:11px;line-height:1.45;opacity:.66;margin:7px 0 0}
+  .scroll-scale{grid-template-columns:repeat(3,1fr)}
+  .scroll-scale span:nth-child(1){text-align:left}
+  .scroll-scale span:nth-child(2){text-align:center}
+  .scroll-scale span:nth-child(3){text-align:right}
+</style>
+</head>
+<body>
+<div id="app" data-services-calibrator>
+  <div id="stage"><div id="frame"><div class="services3d"><canvas data-services-canvas></canvas></div></div></div>
+  <div id="panel">
+    <h2>Viewport</h2>
+    <div class="row mode-row"><button id="responsiveDesktopBtn" class="on">Desktop</button><button id="responsiveMobileBtn">Mobile</button></div>
+
+    <h2>Scroll timeline</h2>
+    <div class="scroll-timeline">
+      <div class="scroll-meta"><span>.h-scroll progress</span><strong id="scrollPctReadout">0.0%</strong></div>
+      <input id="scrollScrub" type="range" min="0" max="100" step="0.1" value="0">
+      <div class="scroll-scale"><span>0%</span><span>50%</span><span>100%</span></div>
+      <div class="row quarter-jumps" id="thirdJumps"><button data-pct="0">0</button><button data-pct="50">50</button><button data-pct="100">100</button></div>
+      <p class="services-note">Three scroll frames. The construction motion is reconstructed from Spline Timeline 2 in the uploaded source.</p>
+    </div>
+
+    <h2>Keyframe</h2><div class="row" id="kfrow"></div><div class="row"><button id="playBtn">▶ Play 0–100%</button></div>
+    <h2>Camera + Spline motion</h2><div id="camCtls"></div><div class="scroll-hint">Live Spline position: <strong id="timelineReadout">0.0% · 0.00s</strong></div>
+    <h2>Lighting & background</h2><div id="lightCtls"></div>
+    <h2>Building material</h2><div id="faceCtls"></div>
+    <h2>Base plate</h2><div id="slabCtls"></div>
+    <h2>Shadows</h2><div id="shadowCtls"><div class="row tog"><button id="tShadowCalibration" class="on">Shadows</button></div><div id="shadowRangeCtls"></div></div>
+    <h2>Edges</h2><div id="edgeCtls"></div>
+    <h2>Glow</h2><div id="glowCtls"></div>
+    <h2>Export</h2><button class="btn" id="copyBtn">Copy COMPLETE DESKTOP + MOBILE + STYLES</button><button class="btn ghost" id="resetBtn">Reset baseline</button><textarea id="out" readonly></textarea>
+    <h2>Status</h2><div id="status">assembling integrated-services model…</div>
+  </div>
+</div>
+<script src="https://cdn.jsdelivr.net/npm/fzstd@0.1.1/umd/index.js"></script>
+<script>
+(() => {
+  const originalDecompress = window.fzstd && window.fzstd.decompress;
+  if (!originalDecompress) return;
+  const decoder = new TextDecoder('utf-8', {fatal:false});
+  window.fzstd.decompress = function(input) {
+    const bytes = originalDecompress(input);
+    if (!(bytes instanceof Uint8Array) || bytes.byteLength < 20) return bytes;
+    if (bytes[0]!==0x67 || bytes[1]!==0x6c || bytes[2]!==0x54 || bytes[3]!==0x46) return bytes;
+
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    const declaredLength = view.getUint32(8, true);
+    if (declaredLength !== bytes.byteLength) {
+      throw new Error(`GLB deep preflight: declared ${declaredLength}; decoded ${bytes.byteLength}`);
+    }
+
+    const jsonLength = view.getUint32(12, true);
+    const jsonType = view.getUint32(16, true);
+    if (jsonType !== 0x4E4F534A) {
+      throw new Error(`GLB deep preflight: first chunk is not JSON (0x${jsonType.toString(16)})`);
+    }
+    if (jsonLength < 2 || 20 + jsonLength > bytes.byteLength) {
+      throw new Error(`GLB deep preflight: invalid JSON chunk length ${jsonLength}`);
+    }
+
+    const jsonBytes = bytes.subarray(20, 20 + jsonLength);
+    const jsonText = decoder.decode(jsonBytes).replace(/\u0000+$/g, '').trimEnd();
+    try {
+      const json = JSON.parse(jsonText);
+      if (!json || json.asset?.version !== '2.0') {
+        throw new Error(`asset.version ${JSON.stringify(json?.asset?.version)}`);
+      }
+      console.info('[ADAM GLB deep preflight] valid JSON chunk', {
+        jsonBytes: jsonLength,
+        nodes: json.nodes?.length || 0,
+        meshes: json.meshes?.length || 0,
+        scenes: json.scenes?.length || 0
+      });
+    } catch (error) {
+      throw new Error(`GLB deep preflight: JSON parse failed (${error.message})`);
+    }
+    return bytes;
+  };
+})();
+</script>
+<script type="importmap">
+{
+  "imports": {
+    "three":"https://unpkg.com/three@0.160.0/build/three.module.js",
+    "three/addons/":"https://unpkg.com/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+<script type="module" src="./integrated-services/runtime-v2.js?v=services-calibrator-v11-20260827-1325"></script>
+</body>
+</html>
