@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>ADAM Integrated Services — model-only diagnostic</title>
+<style>
+html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#f2f3f0;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+canvas{display:block;width:100%;height:100%}
+#hud{position:fixed;left:16px;top:16px;z-index:10;max-width:min(520px,calc(100vw - 32px));padding:12px 14px;background:rgba(18,18,18,.92);color:#eee;border:1px solid #333;border-radius:8px;font-size:12px;line-height:1.45;white-space:pre-wrap}
+#hud strong{color:#c4ff35}
+#badge{display:inline-block;margin-bottom:6px;padding:2px 6px;border-radius:3px;background:#c4ff35;color:#111;font-weight:700}
+</style>
+</head>
+<body>
+<div id="hud"><span id="badge">MODEL-ONLY V16</span>\n<strong id="status">loading recovered GLB…</strong>\nNo timeline · no runtime.js · no edges/glow · no saved camera.</div>
+<canvas id="c"></canvas>
+<script src="https://cdn.jsdelivr.net/npm/fzstd@0.1.1/umd/index.js"></script>
+<script type="importmap">
+{"imports":{"three":"https://unpkg.com/three@0.160.0/build/three.module.js","three/addons/":"https://unpkg.com/three@0.160.0/examples/jsm/"}}
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+const status=document.getElementById('status');
+const canvas=document.getElementById('c');
+const setStatus=t=>status.textContent=t;
+const base=new URL('./integrated-services/',location.href);
+const url=p=>new URL(p,base);
+
+const before=['model-final-00.b64','model-v4-01.b64','model-v4-02.b64','model-v4-03a.b64','model-v4-03b.b64'];
+const after=['model-v4-05.b64','model-v4-06a.b64','model-v4-06b.b64','model-v4-07.b64'];
+const head='model-v4-04a.b64',middle='model-v4-04y.b64',tail='model-v4-04z.b64';
+
+async function text(path){
+  const r=await fetch(url(path)+'?v=model-only-v16',{cache:'no-store'});
+  if(!r.ok)throw new Error(`${path} → HTTP ${r.status}`);
+  return (await r.text()).replace(/\s+/g,'');
+}
+function b64Bytes(s){const b=atob(s);const a=new Uint8Array(b.length);for(let i=0;i<b.length;i++)a[i]=b.charCodeAt(i);return a;}
+function exactArrayBuffer(bytes){return bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.byteLength);}
+
+async function loadGlbBytes(){
+  setStatus('assembling compressed GLB…');
+  const [a,h,m,t,z]=await Promise.all([Promise.all(before.map(text)),text(head),text(middle),text(tail),Promise.all(after.map(text))]);
+  if(h.length<6000)throw new Error(`04a too short: ${h.length}`);
+  if(m.length!==6000)throw new Error(`04y expected 6000, got ${m.length}`);
+  if(t.length!==3254)throw new Error(`04z expected 3254, got ${t.length}`);
+  const chunk04=h.slice(0,6000)+m+t;
+  const assembled=[...a,chunk04,...z].join('');
+  if(assembled.length!==122028)throw new Error(`assembled Base64 ${assembled.length}, expected 122028`);
+  setStatus('decompressing GLB…');
+  const packed=b64Bytes(assembled);
+  const bytes=window.fzstd.decompress(packed);
+  const ab=exactArrayBuffer(bytes);
+  const view=new DataView(ab);
+  if(view.getUint32(0,true)!==0x46546c67)throw new Error('bad GLB magic');
+  if(view.getUint32(4,true)!==2)throw new Error('GLB is not v2');
+  if(view.getUint32(8,true)!==ab.byteLength)throw new Error(`declared GLB length ${view.getUint32(8,true)} != ${ab.byteLength}`);
+  return ab;
+}
+
+function finiteBoxFor(mesh){
+  const g=mesh.geometry;
+  const p=g?.attributes?.position;
+  if(!p||p.count<1)return null;
+  if(!g.boundingBox)g.computeBoundingBox();
+  if(!g.boundingBox)return null;
+  const b=g.boundingBox.clone().applyMatrix4(mesh.matrixWorld);
+  const vals=[b.min.x,b.min.y,b.min.z,b.max.x,b.max.y,b.max.z];
+  return vals.every(Number.isFinite)?b:null;
+}
+function median(arr){if(!arr.length)return 0;const s=[...arr].sort((a,b)=>a-b);const m=Math.floor(s.length/2);return s.length%2?s[m]:(s[m-1]+s[m])/2;}
+function robustSceneBox(root){
+  root.updateMatrixWorld(true);
+  const items=[];
+  root.traverse(o=>{
+    if(!o.isMesh)return;
+    const b=finiteBoxFor(o);if(!b)return;
+    const size=b.getSize(new THREE.Vector3());
+    const diag=size.length();
+    if(!Number.isFinite(diag)||diag<=1e-9)return;
+    items.push({o,b,diag,size});
+  });
+  if(!items.length)throw new Error('no finite mesh bounds found');
+  const med=median(items.map(x=>x.diag));
+  const sensible=items.filter(x=>x.diag<=Math.max(med*25,med+1e-6));
+  const use=sensible.length>=Math.max(3,Math.floor(items.length*.5))?sensible:items;
+  const box=new THREE.Box3();
+  for(const x of use)box.union(x.b);
+  const largest=[...items].sort((a,b)=>b.diag-a.diag).slice(0,5).map(x=>({name:x.o.name||'(unnamed)',diag:+x.diag.toFixed(3),size:x.size.toArray().map(v=>+v.toFixed(3))}));
+  return {box,meshCount:items.length,usedCount:use.length,medianDiag:med,largest};
+}
+
+function fitCamera(camera,controls,box){
+  const size=box.getSize(new THREE.Vector3());
+  const center=box.getCenter(new THREE.Vector3());
+  const radius=Math.max(size.length()/2,1e-6);
+  const fov=THREE.MathUtils.degToRad(camera.fov);
+  let dist=radius/Math.sin(fov/2);
+  dist*=1.15;
+  const dir=new THREE.Vector3(1,0.8,1).normalize();
+  camera.position.copy(center).addScaledVector(dir,dist);
+  camera.near=Math.max(dist/10000,0.001);
+  camera.far=Math.max(dist*20,100);
+  camera.updateProjectionMatrix();
+  controls.target.copy(center);controls.update();
+  return {size,center,dist};
+}
+
+try{
+  const ab=await loadGlbBytes();
+  setStatus(`GLB ${ab.byteLength.toLocaleString()} bytes · parsing raw model…`);
+  const gltf=await new Promise((resolve,reject)=>new GLTFLoader().parse(ab,'',resolve,reject));
+  const root=gltf.scene;
+
+  // Diagnostic visibility: do NOT depend on original white/transparent Spline materials.
+  // Give every genuine mesh a simple normal material so geometry cannot disappear into the background.
+  let meshCount=0;
+  root.traverse(o=>{
+    if(!o.isMesh)return;
+    meshCount++;
+    o.visible=true;
+    o.frustumCulled=false;
+    o.material=new THREE.MeshNormalMaterial({side:THREE.DoubleSide,transparent:false,opacity:1});
+  });
+
+  const renderer=new THREE.WebGLRenderer({canvas,antialias:true,alpha:false});
+  renderer.setPixelRatio(Math.min(devicePixelRatio||1,2));
+  renderer.setClearColor(0xf2f3f0,1);
+  const scene=new THREE.Scene();scene.background=new THREE.Color(0xf2f3f0);scene.add(root);
+  const camera=new THREE.PerspectiveCamera(45,1,.01,10000);
+  const controls=new OrbitControls(camera,canvas);controls.enableDamping=true;
+
+  const bounds=robustSceneBox(root);
+  const fit=fitCamera(camera,controls,bounds.box);
+  console.info('[ADAM model-only v16]',{meshCount,bounds,fit,gltf});
+  setStatus(`MODEL LOADED ✓ · ${meshCount} meshes · fit uses ${bounds.usedCount}/${bounds.meshCount} finite mesh bounds\nsize ${fit.size.toArray().map(v=>v.toFixed(2)).join(' × ')}\nDrag to orbit · wheel to zoom`);
+
+  function resize(){const w=innerWidth,h=innerHeight;renderer.setSize(w,h,false);camera.aspect=w/h;camera.updateProjectionMatrix();}
+  addEventListener('resize',resize);resize();
+  function frame(){controls.update();renderer.render(scene,camera);requestAnimationFrame(frame);}frame();
+}catch(error){
+  console.error('[ADAM model-only v16]',error);
+  setStatus('ERROR · '+error.message);
+}
+</script>
+</body>
+</html>
