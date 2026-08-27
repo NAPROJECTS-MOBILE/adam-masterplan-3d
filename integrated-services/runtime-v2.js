@@ -1,45 +1,57 @@
 /*
   ADAM Integrated Services — calibrator bootstrap V2
   --------------------------------------------------
-  Isolated from the masterplan runtime. Reassembles the compressed uploaded GLB
-  from GitHub-hosted text chunks, validates candidate recovery paths, aligns the
-  reconstructed Spline timeline to the exported GLB transforms, then boots the
-  dedicated services calibrator.
+  Isolated from the masterplan runtime. Reassembles the compressed uploaded GLB,
+  validates candidate recovery paths, falls back to the older complete v2 asset
+  when necessary, aligns the reconstructed Spline timeline to exported GLB
+  transforms, then boots the dedicated services calibrator.
 */
 
 const MODEL_CHUNKS_BEFORE_04 = [
-  './model-final-00.b64?v=services-model-final-v3',
-  './model-v4-01.b64?v=services-model-final-v3',
-  './model-v4-02.b64?v=services-model-final-v3',
-  './model-v4-03a.b64?v=services-model-final-v3',
-  './model-v4-03b.b64?v=services-model-final-v3'
+  './model-final-00.b64?v=services-model-final-v4',
+  './model-v4-01.b64?v=services-model-final-v4',
+  './model-v4-02.b64?v=services-model-final-v4',
+  './model-v4-03a.b64?v=services-model-final-v4',
+  './model-v4-03b.b64?v=services-model-final-v4'
 ];
 
-// Chunk 04 suffered several truncated GitHub writes. The verified recovery
-// windows cover chars 6000–11999 (04y) and 12000–15253 (04z). We have three
-// independent sources that contain at least the first 6000 chars. Rather than
-// trusting a guessed overlap, try each head and accept only a candidate that
-// actually decompresses into a structurally valid GLB.
 const MODEL_CHUNK_04_HEADS = [
-  { label:'04a head', url:'./model-v4-04a.b64?v=services-model-final-v3' },
-  { label:'final-04 head', url:'./model-final-04.b64?v=services-model-final-v3' },
-  { label:'v4-04 head', url:'./model-v4-04.b64?v=services-model-final-v3' }
+  { label:'04a head', url:'./model-v4-04a.b64?v=services-model-final-v4' },
+  { label:'final-04 head', url:'./model-final-04.b64?v=services-model-final-v4' },
+  { label:'v4-04 head', url:'./model-v4-04.b64?v=services-model-final-v4' }
 ];
-const MODEL_CHUNK_04_MIDDLE = './model-v4-04y.b64?v=services-model-final-v3';
-const MODEL_CHUNK_04_TAIL = './model-v4-04z.b64?v=services-model-final-v3';
+const MODEL_CHUNK_04_MIDDLE = './model-v4-04y.b64?v=services-model-final-v4';
+const MODEL_CHUNK_04_TAIL = './model-v4-04z.b64?v=services-model-final-v4';
 
 const MODEL_CHUNKS_AFTER_04 = [
-  './model-v4-05.b64?v=services-model-final-v3',
-  './model-v4-06a.b64?v=services-model-final-v3',
-  './model-v4-06b.b64?v=services-model-final-v3',
-  './model-v4-07.b64?v=services-model-final-v3'
+  './model-v4-05.b64?v=services-model-final-v4',
+  './model-v4-06a.b64?v=services-model-final-v4',
+  './model-v4-06b.b64?v=services-model-final-v4',
+  './model-v4-07.b64?v=services-model-final-v4'
+];
+
+// Older export that was written as a normal complete sequential set rather than
+// the later 15,254-char windows. Keep it as a deterministic fallback so the
+// calibrator can still boot if the damaged v4 slot cannot be recovered.
+const MODEL_V2_CHUNKS = [
+  './model-v2-00.b64?v=services-model-v2-fallback-v1',
+  './model-v2-01.b64?v=services-model-v2-fallback-v1',
+  './model-v2-02.b64?v=services-model-v2-fallback-v1',
+  './model-v2-03.b64?v=services-model-v2-fallback-v1',
+  './model-v2-04.b64?v=services-model-v2-fallback-v1',
+  './model-v2-05.b64?v=services-model-v2-fallback-v1',
+  './model-v2-06.b64?v=services-model-v2-fallback-v1',
+  './model-v2-07.b64?v=services-model-v2-fallback-v1',
+  './model-v2-08.b64?v=services-model-v2-fallback-v1',
+  './model-v2-09.b64?v=services-model-v2-fallback-v1',
+  './model-v2-10.b64?v=services-model-v2-fallback-v1'
 ];
 
 const EXPECTED_CHUNK_04_LENGTH = 15254;
 const CHUNK_04_HEAD_LENGTH = 6000;
 const EXPECTED_CHUNK_04_MIDDLE_LENGTH = 6000;
 const EXPECTED_CHUNK_04_TAIL_LENGTH = 3254;
-const EXPECTED_BASE64_LENGTH = 122028;
+const EXPECTED_V4_BASE64_LENGTH = 122028;
 const nativeFetch = window.fetch.bind(window);
 let cachedModelText = null;
 let cachedModelInfo = null;
@@ -47,6 +59,8 @@ let cachedModelInfo = null;
 function setBootstrapStatus(text) {
   const status = document.getElementById('status');
   if (status) status.textContent = text;
+  const overlay = document.getElementById('bootstrapStatusOverlay');
+  if (overlay) overlay.textContent = text;
 }
 
 async function fetchModelText(url) {
@@ -96,9 +110,7 @@ async function preflightModel(text, label='candidate') {
   return validateGlb(unpacked);
 }
 
-async function assembledModelText() {
-  if (cachedModelText) return cachedModelText;
-
+async function tryV4Recovery() {
   const [before, middle, tail, after, heads] = await Promise.all([
     Promise.all(MODEL_CHUNKS_BEFORE_04.map(fetchModelText)),
     fetchModelText(MODEL_CHUNK_04_MIDDLE),
@@ -131,25 +143,63 @@ async function assembledModelText() {
     }
 
     const joined = [...before, chunk04, ...after].join('');
-    if (joined.length !== EXPECTED_BASE64_LENGTH) {
+    if (joined.length !== EXPECTED_V4_BASE64_LENGTH) {
       failures.push(`${source.label}: full assembly length ${joined.length}`);
       continue;
     }
 
     try {
-      const info = await preflightModel(joined, source.label);
-      cachedModelText = joined;
-      cachedModelInfo = { ...info, source:source.label };
-      console.info('[ADAM integrated services bootstrap] model recovery selected', cachedModelInfo);
-      setBootstrapStatus(`model verified via ${source.label} · GLB v${info.version} · ${info.bytes.toLocaleString()} bytes · booting Three.js…`);
-      return joined;
+      const info = await preflightModel(joined, `v4 · ${source.label}`);
+      return { text:joined, info:{ ...info, source:`v4 · ${source.label}` } };
     } catch (error) {
       console.warn(`[ADAM integrated services bootstrap] ${source.label} rejected`, error);
       failures.push(`${source.label}: ${error.message}`);
     }
   }
 
-  throw new Error(`no valid chunk 04 recovery · ${failures.join(' · ')}`);
+  throw new Error(failures.join(' · '));
+}
+
+async function tryV2Fallback() {
+  setBootstrapStatus('v4 recovery rejected · testing complete v2 asset…');
+  const chunks = await Promise.all(MODEL_V2_CHUNKS.map(fetchModelText));
+  const joined = chunks.join('');
+  if (!joined.length) throw new Error('v2 fallback assembled empty payload');
+  const info = await preflightModel(joined, `v2 fallback · ${joined.length.toLocaleString()} Base64 chars`);
+  return { text:joined, info:{ ...info, source:'complete v2 fallback', base64Chars:joined.length } };
+}
+
+async function assembledModelText() {
+  if (cachedModelText) return cachedModelText;
+
+  const failures = [];
+  try {
+    const result = await tryV4Recovery();
+    cachedModelText = result.text;
+    cachedModelInfo = result.info;
+  } catch (error) {
+    failures.push(`v4: ${error.message}`);
+    console.warn('[ADAM integrated services bootstrap] v4 recovery failed', error);
+  }
+
+  if (!cachedModelText) {
+    try {
+      const result = await tryV2Fallback();
+      cachedModelText = result.text;
+      cachedModelInfo = result.info;
+    } catch (error) {
+      failures.push(`v2: ${error.message}`);
+      console.warn('[ADAM integrated services bootstrap] v2 fallback failed', error);
+    }
+  }
+
+  if (!cachedModelText) {
+    throw new Error(`no valid stored GLB payload · ${failures.join(' || ')}`);
+  }
+
+  console.info('[ADAM integrated services bootstrap] model selected', cachedModelInfo);
+  setBootstrapStatus(`model verified via ${cachedModelInfo.source} · GLB v${cachedModelInfo.version} · ${cachedModelInfo.bytes.toLocaleString()} bytes · booting Three.js…`);
+  return cachedModelText;
 }
 
 window.fetch = async function servicesModelFetch(input, init) {
@@ -166,9 +216,6 @@ window.fetch = async function servicesModelFetch(input, init) {
 };
 
 function alignTimelineToGlb(timeline) {
-  // The crane-stone source object was slightly re-based during Spline's GLB
-  // export. Preserve the authored Spline movement delta, but add the export
-  // offset so the scrubber starts from the GLB's actual local transform.
   const stone = timeline.tracks?.find(track => track.name === 'crane stone');
   if (!stone || stone.__glbAligned) return;
 
@@ -202,11 +249,13 @@ function alignTimelineToGlb(timeline) {
 }
 
 try {
-  setBootstrapStatus('assembling verified integrated-services model…');
+  setBootstrapStatus('assembling integrated-services model…');
   await assembledModelText();
   const animationModule = await import('./animation-data.js');
   alignTimelineToGlb(animationModule.SPLINE_TIMELINE);
   await import('./runtime.js?v=services-runtime-core-v2-20260827');
+  const overlay = document.getElementById('bootstrapStatusOverlay');
+  if (overlay) overlay.remove();
 } catch (error) {
   console.error('[ADAM integrated services bootstrap]', error);
   setBootstrapStatus(`ERROR: ${error.message}`);
@@ -215,6 +264,3 @@ try {
 window.__ADAM_SERVICES_MODEL_BOOTSTRAP = {
   get info(){ return cachedModelInfo; }
 };
-
-// Keep the intercept installed: runtime.js can reload the model during debugging,
-// and it only intercepts this one synthetic model URL.
