@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ADAM Integrated Services — calibration v14 clean mesh</title>
+<link rel="stylesheet" href="./calibrate/style.css?v=services-calibrator-v14-20260827-1348">
+<style>
+  #frame{background:#f2f3f0}
+  .services3d{position:absolute;inset:0;background:#f2f3f0}
+  .services3d canvas{display:block;width:100%;height:100%}
+  .mode-row{margin-bottom:8px}
+  .mode-row button.on{background:#fff;color:#111;border-color:#fff}
+  .services-note{font-size:11px;line-height:1.45;opacity:.66;margin:7px 0 0}
+  .scroll-scale{grid-template-columns:repeat(3,1fr)}
+  .scroll-scale span:nth-child(1){text-align:left}
+  .scroll-scale span:nth-child(2){text-align:center}
+  .scroll-scale span:nth-child(3){text-align:right}
+</style>
+</head>
+<body>
+<div id="app" data-services-calibrator>
+  <div id="stage"><div id="frame"><div class="services3d"><canvas data-services-canvas></canvas></div></div></div>
+  <div id="panel">
+    <h2>Viewport</h2>
+    <div class="row mode-row"><button id="responsiveDesktopBtn" class="on">Desktop</button><button id="responsiveMobileBtn">Mobile</button></div>
+    <h2>Scroll timeline</h2>
+    <div class="scroll-timeline">
+      <div class="scroll-meta"><span>.h-scroll progress</span><strong id="scrollPctReadout">0.0%</strong></div>
+      <input id="scrollScrub" type="range" min="0" max="100" step="0.1" value="0">
+      <div class="scroll-scale"><span>0%</span><span>50%</span><span>100%</span></div>
+      <div class="row quarter-jumps" id="thirdJumps"><button data-pct="0">0</button><button data-pct="50">50</button><button data-pct="100">100</button></div>
+      <p class="services-note">Clean-mesh diagnostic: edge/glow geometry disabled while GLB node mapping and scale are verified.</p>
+    </div>
+    <h2>Keyframe</h2><div class="row" id="kfrow"></div><div class="row"><button id="playBtn">▶ Play 0–100%</button></div>
+    <h2>Camera + Spline motion</h2><div id="camCtls"></div><div class="scroll-hint">Live Spline position: <strong id="timelineReadout">0.0% · 0.00s</strong></div>
+    <h2>Lighting & background</h2><div id="lightCtls"></div>
+    <h2>Building material</h2><div id="faceCtls"></div>
+    <h2>Base plate</h2><div id="slabCtls"></div>
+    <h2>Shadows</h2><div id="shadowCtls"><div class="row tog"><button id="tShadowCalibration" class="on">Shadows</button></div><div id="shadowRangeCtls"></div></div>
+    <h2>Edges</h2><div id="edgeCtls"></div>
+    <h2>Glow</h2><div id="glowCtls"></div>
+    <h2>Export</h2><button class="btn" id="copyBtn">Copy COMPLETE DESKTOP + MOBILE + STYLES</button><button class="btn ghost" id="resetBtn">Reset baseline</button><textarea id="out" readonly></textarea>
+    <h2>Status</h2><div id="status">assembling integrated-services model…</div>
+  </div>
+</div>
+<script src="https://cdn.jsdelivr.net/npm/fzstd@0.1.1/umd/index.js"></script>
+<script>
+(() => {
+  const originalDecompress = window.fzstd && window.fzstd.decompress;
+  if (!originalDecompress) return;
+  const decoder = new TextDecoder('utf-8', {fatal:false});
+  window.fzstd.decompress = function(input) {
+    const bytes = originalDecompress(input);
+    if (!(bytes instanceof Uint8Array) || bytes.byteLength < 20) return bytes;
+    if (bytes[0]!==0x67 || bytes[1]!==0x6c || bytes[2]!==0x54 || bytes[3]!==0x46) return bytes;
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    const declaredLength = view.getUint32(8, true);
+    if (declaredLength !== bytes.byteLength) throw new Error(`GLB deep preflight: declared ${declaredLength}; decoded ${bytes.byteLength}`);
+    const jsonLength = view.getUint32(12, true);
+    const jsonType = view.getUint32(16, true);
+    if (jsonType !== 0x4E4F534A) throw new Error(`GLB deep preflight: first chunk is not JSON (0x${jsonType.toString(16)})`);
+    const jsonText = decoder.decode(bytes.subarray(20,20+jsonLength)).replace(/\u0000+$/g,'').trimEnd();
+    const json = JSON.parse(jsonText);
+    if (json.asset?.version !== '2.0') throw new Error(`GLB deep preflight: asset.version ${JSON.stringify(json.asset?.version)}`);
+    return bytes;
+  };
+})();
+</script>
+<script type="importmap">
+{
+  "imports": {
+    "three":"https://unpkg.com/three@0.160.0/build/three.module.js",
+    "three/addons/":"https://unpkg.com/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { LineSegmentsGeometry } from 'three/addons/lines/LineSegmentsGeometry.js';
+import { SPLINE_TIMELINE } from './integrated-services/animation-data.js?v=services-timeline-v14';
+
+// 1) Keep traversal stable if children are added during traversal.
+if (!THREE.Object3D.prototype.__adamStableTraversePatch) {
+  THREE.Object3D.prototype.traverse = function(callback) {
+    const children = this.children.slice();
+    callback(this);
+    for (const child of children) child.traverse(callback);
+  };
+  THREE.Object3D.prototype.__adamStableTraversePatch = true;
+}
+
+// 2) Diagnostic safe mode: do not build fat-line edge/glow geometry yet.
+// This removes the NaN LineSegmentsGeometry noise and lets us verify the real mesh.
+if (!LineSegmentsGeometry.prototype.__adamSafePositionsPatch) {
+  const originalSetPositions = LineSegmentsGeometry.prototype.setPositions;
+  LineSegmentsGeometry.prototype.setPositions = function() {
+    return originalSetPositions.call(this, new Float32Array(0));
+  };
+  LineSegmentsGeometry.prototype.__adamSafePositionsPatch = true;
+  console.info('[ADAM clean mesh] edge/glow line geometry disabled');
+}
+
+const nodeNameByIndex = new Map();
+for (const track of SPLINE_TIMELINE.tracks || []) {
+  for (const index of track.gltfCandidates || []) {
+    if (!nodeNameByIndex.has(index)) nodeNameByIndex.set(index, track.name);
+  }
+}
+
+function exactGlbSlice(data) {
+  if (!(data instanceof ArrayBuffer) || data.byteLength < 12) return data;
+  const bytes = new Uint8Array(data);
+  for (let i=0;i<=bytes.length-12;i++) {
+    if (bytes[i]===0x67 && bytes[i+1]===0x6c && bytes[i+2]===0x54 && bytes[i+3]===0x46) {
+      const view = new DataView(data,i);
+      const version=view.getUint32(4,true), declared=view.getUint32(8,true);
+      if (version===2 && declared>=20 && i+declared<=data.byteLength) return data.slice(i,i+declared);
+    }
+  }
+  return data;
+}
+
+if (!GLTFLoader.prototype.__adamCleanMeshPatch) {
+  const originalParse = GLTFLoader.prototype.parse;
+  GLTFLoader.prototype.parse = function(data,path,onLoad,onError) {
+    data = exactGlbSlice(data);
+    const wrappedOnLoad = gltf => {
+      let mapped = 0;
+      const associations = gltf.parser?.associations;
+      if (associations) {
+        for (const [object, association] of associations) {
+          const nodeIndex = association?.nodes;
+          const mappedName = nodeNameByIndex.get(nodeIndex);
+          if (mappedName) {
+            object.name = mappedName;
+            object.userData.adamGltfNodeIndex = nodeIndex;
+            mapped++;
+          }
+        }
+      }
+
+      // Normalize the exported Spline-unit scene into the camera space used by
+      // the saved masterplan calibrator. Children keep their original local
+      // coordinates, so reconstructed timeline transforms still operate in the
+      // authored Spline units beneath this root transform.
+      gltf.scene.updateMatrixWorld(true);
+      const box = new THREE.Box3().setFromObject(gltf.scene);
+      const size = box.getSize(new THREE.Vector3());
+      const center = box.getCenter(new THREE.Vector3());
+      const maxDim = Math.max(size.x,size.y,size.z);
+      let scale = 1;
+      if (Number.isFinite(maxDim) && maxDim > 0.0001) scale = 16 / maxDim;
+      if (!Number.isFinite(scale) || scale <= 0) scale = 0.04;
+      gltf.scene.scale.setScalar(scale);
+      if ([center.x,center.y,center.z].every(Number.isFinite)) {
+        gltf.scene.position.set(-center.x*scale,-center.y*scale,-center.z*scale);
+      }
+      gltf.scene.updateMatrixWorld(true);
+      console.info('[ADAM clean mesh] GLB normalized', {
+        mappedTimelineNodes:mapped,
+        expectedTracks:SPLINE_TIMELINE.tracks?.length||0,
+        sourceSize:[size.x,size.y,size.z],
+        sourceCenter:[center.x,center.y,center.z],
+        rootScale:scale
+      });
+      onLoad(gltf);
+    };
+    return originalParse.call(this,data,path,wrappedOnLoad,onError);
+  };
+  GLTFLoader.prototype.__adamCleanMeshPatch = true;
+}
+
+await import('./integrated-services/runtime-v2.js?v=services-calibrator-v14-20260827-1348');
+</script>
+</body>
+</html>
