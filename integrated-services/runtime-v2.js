@@ -2,8 +2,9 @@
   ADAM Integrated Services — calibrator bootstrap V2
   --------------------------------------------------
   Isolated from the masterplan runtime. Reassembles the compressed uploaded GLB
-  from GitHub-hosted text chunks, aligns the reconstructed Spline timeline to
-  the exported GLB transforms, then boots the dedicated services calibrator.
+  from GitHub-hosted text chunks, validates the reconstructed payload, aligns
+  the reconstructed Spline timeline to the exported GLB transforms, then boots
+  the dedicated services calibrator.
 */
 
 const MODEL_CHUNKS_BEFORE_04 = [
@@ -34,6 +35,11 @@ const EXPECTED_CHUNK_04_TAIL_LENGTH = 3254;
 const EXPECTED_BASE64_LENGTH = 122028;
 const nativeFetch = window.fetch.bind(window);
 let cachedModelText = null;
+
+function setBootstrapStatus(text) {
+  const status = document.getElementById('status');
+  if (status) status.textContent = text;
+}
 
 async function fetchModelText(url) {
   const response = await nativeFetch(new URL(url, import.meta.url), { cache:'no-store' });
@@ -91,6 +97,49 @@ async function assembledModelText() {
   return joined;
 }
 
+function base64ToBytes(text) {
+  const bin = atob(text);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return bytes;
+}
+
+function validateGlb(bytes) {
+  if (!(bytes instanceof Uint8Array) || bytes.byteLength < 12) {
+    throw new Error(`GLB preflight: payload too small (${bytes?.byteLength || 0} bytes)`);
+  }
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const magic = String.fromCharCode(bytes[0], bytes[1], bytes[2], bytes[3]);
+  const version = view.getUint32(4, true);
+  const declaredLength = view.getUint32(8, true);
+  if (magic !== 'glTF') throw new Error(`GLB preflight: bad magic ${JSON.stringify(magic)}`);
+  if (version !== 2) throw new Error(`GLB preflight: unsupported version ${version}`);
+  if (declaredLength !== bytes.byteLength) {
+    throw new Error(`GLB preflight: declared ${declaredLength} bytes; decoded ${bytes.byteLength}`);
+  }
+  return { version, bytes: bytes.byteLength };
+}
+
+async function preflightModel(text) {
+  setBootstrapStatus('model assembled · validating compressed payload…');
+  if (!window.fzstd?.decompress) throw new Error('GLB preflight: fzstd decompressor missing');
+  let packed;
+  try {
+    packed = base64ToBytes(text);
+  } catch (error) {
+    throw new Error(`GLB preflight: invalid Base64 (${error.message})`);
+  }
+  let unpacked;
+  try {
+    unpacked = window.fzstd.decompress(packed);
+  } catch (error) {
+    throw new Error(`GLB preflight: zstd decompression failed (${error.message})`);
+  }
+  const info = validateGlb(unpacked);
+  setBootstrapStatus(`model verified · GLB v${info.version} · ${info.bytes.toLocaleString()} bytes · booting Three.js…`);
+  return info;
+}
+
 window.fetch = async function servicesModelFetch(input, init) {
   const requestUrl = typeof input === 'string' ? input : input?.url || String(input);
   const absolute = new URL(requestUrl, location.href);
@@ -141,14 +190,15 @@ function alignTimelineToGlb(timeline) {
 }
 
 try {
-  await assembledModelText();
+  setBootstrapStatus('assembling verified integrated-services model…');
+  const modelText = await assembledModelText();
+  await preflightModel(modelText);
   const animationModule = await import('./animation-data.js');
   alignTimelineToGlb(animationModule.SPLINE_TIMELINE);
   await import('./runtime.js?v=services-runtime-core-v2-20260827');
 } catch (error) {
   console.error('[ADAM integrated services bootstrap]', error);
-  const status = document.getElementById('status');
-  if (status) status.textContent = `ERROR: ${error.message}`;
+  setBootstrapStatus(`ERROR: ${error.message}`);
 }
 
 // Keep the intercept installed: runtime.js can reload the model during debugging,
