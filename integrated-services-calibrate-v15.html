@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ADAM Integrated Services — full-build diagnostic</title>
+<style>
+html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#3e3749}
+iframe{display:block;width:100%;height:100%;border:0}
+</style>
+</head>
+<body>
+<iframe id="cal" src="./integrated-services-calibrate-v14.html?v=services-full-build-v15"></iframe>
+<script>
+const frame=document.getElementById('cal');
+function forceFinalState(){
+  try{
+    const w=frame.contentWindow;
+    const cal=w.__ADAM_INTEGRATED_SERVICES_CALIBRATOR;
+    if(!cal||!cal.model)return false;
+
+    // Hide every generated fat-line outline/glow object. The underlying mesh
+    // remains untouched; this is a pure geometry diagnostic.
+    cal.model.traverse(o=>{
+      if(o && (o.isLineSegments2 || o.type==='LineSegments2' || o.constructor?.name==='LineSegments2')) o.visible=false;
+    });
+
+    // Force the diagnostic to the fully built Spline state so the mapped walls,
+    // roofs and floor pieces are not collapsed at the beginning of Timeline 2.
+    cal.setProgress(100);
+    cal.applyTimeline(1);
+
+    const doc=frame.contentDocument;
+    const finalButton=doc?.querySelector('#kfrow button:nth-child(3)');
+    if(finalButton && !finalButton.dataset.adamForced){
+      finalButton.dataset.adamForced='1';
+      finalButton.click();
+    }
+    const note=doc?.querySelector('.services-note');
+    if(note) note.textContent='FULL-BUILD DIAGNOSTIC · forced to 100% Timeline 2 · generated edge/glow objects hidden.';
+    return true;
+  }catch(err){console.warn('[ADAM v15 wrapper]',err);return false;}
+}
+frame.addEventListener('load',()=>{
+  let tries=0;
+  const timer=setInterval(()=>{
+    tries++;
+    if(forceFinalState()||tries>200)clearInterval(timer);
+  },100);
+});
+</script>
+</body>
+</html>
